@@ -1,0 +1,30 @@
+# CQR Experiment Configuration: 2D case
+# ======================================
+
+# Core experiment parameters
+alpha: 0.05
+beta: 1.0
+d: 2                 # 2D input space: [-1,1]^2
+seed: 42
+
+# Monte Carlo settings
+n_attempts: 30       # Fewer attempts for higher d (slower)
+
+# Neural network settings
+hidden_dim: 128      # Larger network for higher d
+train_epochs: 400    # More epochs for higher d
+learning_rate: 0.01
+
+# Sample size grid
+n_grid_start: 500    # Need more samples in higher d
+n_grid_end: 50000
+n_grid_num: 12
+
+# Fixed sample size (for localized experiments)
+n_fixed: 50000
+
+# Test set size
+n_test: 2000
+
+# Output directory
+output_dir: "."

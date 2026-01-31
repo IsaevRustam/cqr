@@ -1,0 +1,105 @@
+"""
+Experiment configuration with YAML support.
+"""
+
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Optional
+import yaml
+
+
+@dataclass
+class ExperimentConfig:
+    """
+    Configuration for CQR experiments.
+
+    Attributes:
+        alpha: Miscoverage level (default 0.05 for 95% coverage)
+        beta: Hölder smoothness parameter (fixed at 1.0 for now)
+        d: Input dimension (1, 2, 4, etc.)
+        seed: Random seed for reproducibility
+        n_attempts: Number of Monte Carlo repetitions
+        hidden_dim: Hidden layer dimension for QuantileNN
+        train_epochs: Number of training epochs
+        learning_rate: Learning rate for Adam optimizer
+        n_grid: Sample sizes for convergence experiment (geomspace)
+        n_grid_start: Start of geomspace for n_grid
+        n_grid_end: End of geomspace for n_grid
+        n_grid_num: Number of points in n_grid
+        n_test: Number of test points for evaluation
+        output_dir: Directory for output files
+    """
+
+    # Core experiment parameters
+    alpha: float = 0.05
+    beta: float = 1.0
+    d: int = 1
+    seed: int = 42
+
+    # Monte Carlo settings
+    n_attempts: int = 50
+
+    # Neural network settings
+    hidden_dim: int = 64
+    train_epochs: int = 300
+    learning_rate: float = 0.01
+
+    # Sample size grid (for convergence experiments)
+    n_grid_start: int = 100
+    n_grid_end: int = 10000
+    n_grid_num: int = 15
+
+    # Fixed sample size (for localized experiments)
+    n_fixed: int = 20000
+
+    # Test set size
+    n_test: int = 1000
+
+    # Output
+    output_dir: str = "."
+
+    @property
+    def tau_low(self) -> float:
+        """Lower quantile level."""
+        return self.alpha / 2
+
+    @property
+    def tau_high(self) -> float:
+        """Upper quantile level."""
+        return 1 - self.alpha / 2
+
+    @property
+    def theory_rate(self) -> float:
+        """Theoretical convergence rate exponent: -β/(2β+d)."""
+        return -self.beta / (2 * self.beta + self.d)
+
+    def to_yaml(self, path: Path) -> None:
+        """Save configuration to YAML file."""
+        with open(path, "w") as f:
+            yaml.dump(asdict(self), f, default_flow_style=False, sort_keys=False)
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> "ExperimentConfig":
+        """Load configuration from YAML file."""
+        with open(path, "r") as f:
+            data = yaml.safe_load(f)
+        return cls(**data)
+
+
+def load_config(path: Optional[str] = None) -> ExperimentConfig:
+    """
+    Load configuration from YAML file or return default config.
+
+    Args:
+        path: Path to YAML config file. If None, returns default config.
+
+    Returns:
+        ExperimentConfig instance
+    """
+    if path is None:
+        return ExperimentConfig()
+    return ExperimentConfig.from_yaml(Path(path))
+
+
+# Default config for quick access
+DEFAULT_CONFIG = ExperimentConfig()

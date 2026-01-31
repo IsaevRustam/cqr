@@ -1,0 +1,30 @@
+# CQR Experiment Configuration
+# =============================
+
+# Core experiment parameters
+alpha: 0.05          # Miscoverage level (1-α = coverage)
+beta: 1.0            # Hölder smoothness (fixed at 1 for now)
+d: 1                 # Input dimension: 1, 2, or 4
+seed: 42             # Random seed for reproducibility
+
+# Monte Carlo settings
+n_attempts: 50       # Number of Monte Carlo repetitions
+
+# Neural network settings
+hidden_dim: 64       # Hidden layer width
+train_epochs: 300    # Training epochs
+learning_rate: 0.01  # Adam learning rate
+
+# Sample size grid (for convergence experiments)
+n_grid_start: 100
+n_grid_end: 10000
+n_grid_num: 15
+
+# Fixed sample size (for localized experiments)
+n_fixed: 20000
+
+# Test set size
+n_test: 1000
+
+# Output directory
+output_dir: "."

@@ -1,0 +1,255 @@
+"""
+Data generation utilities with multi-dimensional support.
+
+Supports dimensions d ∈ {1, 2, 3, 4, ...} using norm-based heteroscedasticity.
+"""
+
+import numpy as np
+from scipy.stats import truncnorm, norm
+from typing import Tuple
+
+
+# =============================================================================
+# UNIFORM DISTRIBUTION DATA
+# =============================================================================
+
+
+def generate_uniform_data(
+    n: int,
+    d: int = 1,
+    beta: float = 1.0,
+    mu_scale: float = 5.0,
+    sigma_base: float = 3.0,
+    sigma_scale: float = 3.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate heteroscedastic regression data with uniform X.
+
+    X ~ Uniform[-1, 1]^d
+    Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
+
+    For d > 1, we use norm-based heteroscedasticity:
+        μ(x) = sin(5 * ||x||) * scale + mu_scale * ||x||^β
+        σ(x) = sigma_base + sigma_scale * ||x||^β
+
+    This preserves Hölder smoothness in all dimensions.
+
+    Args:
+        n: Sample size
+        d: Input dimension
+        beta: Hölder smoothness parameter
+        mu_scale: Scaling for the trend component
+        sigma_base: Base noise level
+        sigma_scale: Scaling for heteroscedastic noise
+
+    Returns:
+        X: Features of shape (n, d)
+        Y: Targets of shape (n, 1)
+    """
+    X = np.random.uniform(-1, 1, (n, d)).astype(np.float32)
+
+    # Compute norm for multi-dimensional case
+    if d == 1:
+        norm_x = np.abs(X)
+    else:
+        norm_x = np.linalg.norm(X, axis=1, keepdims=True)
+
+    # Heteroscedastic model using norm
+    # sin(5*||x||) adds non-linearity, ||x||^β adds trend
+    mu_x = 3 * np.sin(5 * norm_x) + mu_scale * np.power(norm_x, beta)
+    sigma_x = sigma_base + sigma_scale * np.power(norm_x, beta)
+
+    # Generate response
+    epsilon = np.random.normal(0, 1, (n, 1)).astype(np.float32)
+    Y = mu_x + sigma_x * epsilon
+
+    return X, Y.astype(np.float32)
+
+
+def get_oracle_interval_length(
+    X: np.ndarray,
+    alpha: float,
+    beta: float = 1.0,
+    sigma_base: float = 3.0,
+    sigma_scale: float = 3.0,
+) -> np.ndarray:
+    """
+    Compute the oracle (true) interval length |C*(x)|.
+
+    For Gaussian noise: |C*(x)| = 2 * z_{1-α/2} * σ(x)
+
+    Args:
+        X: Features of shape (n, d)
+        alpha: Miscoverage level
+        beta: Hölder smoothness
+        sigma_base: Base noise level (must match generate_uniform_data)
+        sigma_scale: Heteroscedastic scale (must match generate_uniform_data)
+
+    Returns:
+        Oracle interval lengths of shape (n,)
+    """
+    # Compute norm
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+
+    if X.shape[1] == 1:
+        norm_x = np.abs(X)
+    else:
+        norm_x = np.linalg.norm(X, axis=1, keepdims=True)
+
+    sigma_x = sigma_base + sigma_scale * np.power(norm_x, beta)
+    z_score = norm.ppf(1 - alpha / 2)
+
+    return (2 * z_score * sigma_x).flatten()
+
+
+# =============================================================================
+# TRUNCATED NORMAL DISTRIBUTION DATA
+# =============================================================================
+
+
+def generate_truncated_normal_data(
+    n: int,
+    d: int = 1,
+    beta: float = 1.0,
+    loc: float = 0.0,
+    scale: float = 0.5,
+    mu_scale: float = 10.0,
+    sigma_base: float = 10.0,
+    sigma_scale: float = 10.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate heteroscedastic regression data with TRUNCATED NORMAL X.
+
+    X_i ~ TruncatedNormal(loc, scale) on [-1, 1] independently for each dimension.
+    Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
+
+    This creates high density near the center and low density at boundaries.
+
+    Args:
+        n: Sample size
+        d: Input dimension
+        beta: Hölder smoothness parameter
+        loc: Mean of the underlying normal (each dimension)
+        scale: Std of the underlying normal (each dimension)
+        mu_scale: Scaling for the mean function
+        sigma_base: Base noise level
+        sigma_scale: Scaling for heteroscedastic noise
+
+    Returns:
+        X: Features of shape (n, d)
+        Y: Targets of shape (n, 1)
+    """
+    # Standardized bounds for truncnorm
+    a = (-1 - loc) / scale
+    b = (1 - loc) / scale
+
+    # Generate each dimension independently
+    X = truncnorm.rvs(a, b, loc=loc, scale=scale, size=(n, d)).astype(np.float32)
+
+    # Compute norm for multi-dimensional case
+    if d == 1:
+        norm_x = np.abs(X)
+    else:
+        norm_x = np.linalg.norm(X, axis=1, keepdims=True)
+
+    # Heteroscedastic model
+    mu_x = mu_scale * np.power(norm_x, beta)
+    sigma_x = sigma_scale * np.power(norm_x, beta) + sigma_base
+
+    # Generate response
+    epsilon = np.random.normal(0, 1, (n, 1)).astype(np.float32)
+    Y = mu_x + sigma_x * epsilon
+
+    return X, Y.astype(np.float32)
+
+
+def get_oracle_bounds(
+    X: np.ndarray,
+    alpha: float,
+    beta: float = 1.0,
+    mu_scale: float = 10.0,
+    sigma_base: float = 10.0,
+    sigma_scale: float = 10.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute oracle quantile bounds q_{α/2}(x) and q_{1-α/2}(x).
+
+    For Gaussian noise:
+        q_{α/2}(x) = μ(x) + σ(x) * Φ^{-1}(α/2)
+        q_{1-α/2}(x) = μ(x) + σ(x) * Φ^{-1}(1-α/2)
+
+    Args:
+        X: Features of shape (n, d)
+        alpha: Miscoverage level
+        beta: Hölder smoothness
+        mu_scale, sigma_base, sigma_scale: Must match generate_truncated_normal_data
+
+    Returns:
+        (q_lo, q_hi): Oracle lower and upper bounds, each of shape (n,)
+    """
+    # Compute norm
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+
+    if X.shape[1] == 1:
+        norm_x = np.abs(X)
+    else:
+        norm_x = np.linalg.norm(X, axis=1, keepdims=True)
+
+    mu_x = mu_scale * np.power(norm_x, beta)
+    sigma_x = sigma_scale * np.power(norm_x, beta) + sigma_base
+
+    z_lo = norm.ppf(alpha / 2)
+    z_hi = norm.ppf(1 - alpha / 2)
+
+    q_lo = (mu_x + sigma_x * z_lo).flatten()
+    q_hi = (mu_x + sigma_x * z_hi).flatten()
+
+    return q_lo, q_hi
+
+
+# =============================================================================
+# TEST GRID GENERATION
+# =============================================================================
+
+
+def generate_test_grid(d: int, n_per_dim: int = 50) -> np.ndarray:
+    """
+    Generate a regular grid on [-1, 1]^d for evaluation.
+
+    For d=1: linspace
+    For d>1: meshgrid flattened
+
+    Args:
+        d: Dimension
+        n_per_dim: Number of points per dimension
+
+    Returns:
+        X_grid of shape (n_per_dim^d, d) — warning: grows exponentially!
+    """
+    if d == 1:
+        return np.linspace(-1, 1, n_per_dim).reshape(-1, 1).astype(np.float32)
+
+    # For higher dimensions, use meshgrid
+    axes = [np.linspace(-1, 1, n_per_dim) for _ in range(d)]
+    grids = np.meshgrid(*axes, indexing="ij")
+    X_grid = np.stack([g.flatten() for g in grids], axis=1).astype(np.float32)
+
+    return X_grid
+
+
+def generate_random_test_points(n: int, d: int) -> np.ndarray:
+    """
+    Generate random test points uniformly on [-1, 1]^d.
+
+    Preferred over grid for high dimensions to avoid exponential blowup.
+
+    Args:
+        n: Number of test points
+        d: Dimension
+
+    Returns:
+        X_test of shape (n, d)
+    """
+    return np.random.uniform(-1, 1, (n, d)).astype(np.float32)
