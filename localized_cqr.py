@@ -263,7 +263,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default=None,
+        default="configs/default.yaml",
         help="Path to YAML config file (default: use built-in defaults)",
     )
     parser.add_argument(
