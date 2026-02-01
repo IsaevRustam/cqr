@@ -253,3 +253,205 @@ def generate_random_test_points(n: int, d: int) -> np.ndarray:
         X_test of shape (n, d)
     """
     return np.random.uniform(-1, 1, (n, d)).astype(np.float32)
+
+
+# =============================================================================
+# BETA DISTRIBUTION DATA (ASYMMETRIC DENSITY)
+# =============================================================================
+
+
+def generate_beta_data(
+    n: int,
+    d: int = 1,
+    beta_param: float = 1.0,
+    a: float = 2.0,
+    b: float = 5.0,
+    mu_scale: float = 10.0,
+    sigma_base: float = 10.0,
+    sigma_scale: float = 10.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate heteroscedastic regression data with BETA distribution X.
+
+    X_i ~ Beta(a, b) scaled to [-1, 1] independently for each dimension.
+    Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
+
+    With a=2, b=5: High density on the LEFT side (-1), low on the right (+1).
+    This creates a clear density gradient for demonstrating adaptive intervals.
+
+    Args:
+        n: Sample size
+        d: Input dimension
+        beta_param: Hölder smoothness parameter
+        a, b: Beta distribution parameters
+        mu_scale: Scaling for the mean function
+        sigma_base: Base noise level
+        sigma_scale: Scaling for heteroscedastic noise
+
+    Returns:
+        X: Features of shape (n, d)
+        Y: Targets of shape (n, 1)
+    """
+    from scipy.stats import beta as beta_dist
+
+    # Generate Beta(a, b) on [0, 1] then scale to [-1, 1]
+    X_01 = beta_dist.rvs(a, b, size=(n, d))
+    X = (2 * X_01 - 1).astype(np.float32)  # Scale to [-1, 1]
+
+    # Compute norm for multi-dimensional case
+    if d == 1:
+        norm_x = np.abs(X)
+    else:
+        norm_x = np.linalg.norm(X, axis=1, keepdims=True)
+
+    # Heteroscedastic model
+    mu_x = mu_scale * np.power(norm_x, beta_param)
+    sigma_x = sigma_scale * np.power(norm_x, beta_param) + sigma_base
+
+    # Generate response
+    epsilon = np.random.normal(0, 1, (n, 1)).astype(np.float32)
+    Y = mu_x + sigma_x * epsilon
+
+    return X, Y.astype(np.float32)
+
+
+def get_oracle_bounds_beta(
+    X: np.ndarray,
+    alpha: float,
+    beta_param: float = 1.0,
+    mu_scale: float = 10.0,
+    sigma_base: float = 10.0,
+    sigma_scale: float = 10.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute oracle quantile bounds for Beta distribution data.
+    Same heteroscedastic model as generate_beta_data.
+    """
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+
+    if X.shape[1] == 1:
+        norm_x = np.abs(X)
+    else:
+        norm_x = np.linalg.norm(X, axis=1, keepdims=True)
+
+    mu_x = mu_scale * np.power(norm_x, beta_param)
+    sigma_x = sigma_scale * np.power(norm_x, beta_param) + sigma_base
+
+    z_lo = norm.ppf(alpha / 2)
+    z_hi = norm.ppf(1 - alpha / 2)
+
+    q_lo = (mu_x + sigma_x * z_lo).flatten()
+    q_hi = (mu_x + sigma_x * z_hi).flatten()
+
+    return q_lo, q_hi
+
+
+# =============================================================================
+# GAUSSIAN MIXTURE DISTRIBUTION DATA (BIMODAL DENSITY)
+# =============================================================================
+
+
+def generate_mixture_data(
+    n: int,
+    d: int = 1,
+    beta_param: float = 1.0,
+    centers: Tuple[float, float] = (-0.6, 0.6),
+    scales: Tuple[float, float] = (0.15, 0.15),
+    weights: Tuple[float, float] = (0.5, 0.5),
+    mu_scale: float = 10.0,
+    sigma_base: float = 10.0,
+    sigma_scale: float = 10.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate heteroscedastic regression data with GAUSSIAN MIXTURE X.
+
+    X_i ~ sum_k w_k * TruncatedNormal(center_k, scale_k) on [-1, 1]
+    Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
+
+    Default: Two modes at -0.6 and +0.6 with tight variance.
+    This creates sparse regions around x=0 and edges, dense regions at modes.
+
+    Args:
+        n: Sample size
+        d: Input dimension
+        beta_param: Hölder smoothness parameter
+        centers: Centers of the two mixture components
+        scales: Scales (std) of the two components
+        weights: Mixing weights (sum to 1)
+        mu_scale: Scaling for the mean function
+        sigma_base: Base noise level
+        sigma_scale: Scaling for heteroscedastic noise
+
+    Returns:
+        X: Features of shape (n, d)
+        Y: Targets of shape (n, 1)
+    """
+    # Sample component assignments
+    n1 = int(n * weights[0])
+    n2 = n - n1
+
+    X_parts = []
+    for i, (center, scale, count) in enumerate(
+        [(centers[0], scales[0], n1), (centers[1], scales[1], n2)]
+    ):
+        if count == 0:
+            continue
+        # Truncated normal on [-1, 1]
+        a = (-1 - center) / scale
+        b = (1 - center) / scale
+        X_comp = truncnorm.rvs(a, b, loc=center, scale=scale, size=(count, d))
+        X_parts.append(X_comp)
+
+    X = np.vstack(X_parts).astype(np.float32)
+    # Shuffle to mix components
+    np.random.shuffle(X)
+
+    # Compute norm for multi-dimensional case
+    if d == 1:
+        norm_x = np.abs(X)
+    else:
+        norm_x = np.linalg.norm(X, axis=1, keepdims=True)
+
+    # Heteroscedastic model
+    mu_x = mu_scale * np.power(norm_x, beta_param)
+    sigma_x = sigma_scale * np.power(norm_x, beta_param) + sigma_base
+
+    # Generate response
+    epsilon = np.random.normal(0, 1, (n, 1)).astype(np.float32)
+    Y = mu_x + sigma_x * epsilon
+
+    return X, Y.astype(np.float32)
+
+
+def get_oracle_bounds_mixture(
+    X: np.ndarray,
+    alpha: float,
+    beta_param: float = 1.0,
+    mu_scale: float = 10.0,
+    sigma_base: float = 10.0,
+    sigma_scale: float = 10.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute oracle quantile bounds for Mixture distribution data.
+    Same heteroscedastic model as generate_mixture_data.
+    """
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+
+    if X.shape[1] == 1:
+        norm_x = np.abs(X)
+    else:
+        norm_x = np.linalg.norm(X, axis=1, keepdims=True)
+
+    mu_x = mu_scale * np.power(norm_x, beta_param)
+    sigma_x = sigma_scale * np.power(norm_x, beta_param) + sigma_base
+
+    z_lo = norm.ppf(alpha / 2)
+    z_hi = norm.ppf(1 - alpha / 2)
+
+    q_lo = (mu_x + sigma_x * z_lo).flatten()
+    q_hi = (mu_x + sigma_x * z_hi).flatten()
+
+    return q_lo, q_hi
+

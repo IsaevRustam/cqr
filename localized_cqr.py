@@ -1,30 +1,38 @@
 """
-Experiment B: Localized (Kernel) CQR (Theorem 5)
-=================================================
+Experiment B: Localized (Kernel) CQR vs Global CQR Comparison
+==============================================================
 Demonstrates density-adaptive prediction intervals using kernel-weighted
-conformal calibration.
+conformal calibration and compares against unweighted (global) CQR.
 
-Key insight: Intervals are narrow where data density is high (center),
-and wider where density is low (edges).
+Key insight: Weighted CQR produces narrow intervals where data density is high,
+and wider where density is low. Unweighted CQR produces constant-width intervals.
 
 Reference: Theorem 5 from the article on non-asymptotic guarantees for CQR.
 
 Usage:
-    python experiment_localized_cqr.py                    # default config (d=1)
-    python experiment_localized_cqr.py --config configs/d2.yaml  # d=2
+    python localized_cqr.py                                        # truncated normal, d=1
+    python localized_cqr.py --distribution beta                    # beta distribution, d=1
+    python localized_cqr.py --distribution mixture                 # gaussian mixture, d=1
+    python localized_cqr.py --config configs/d2.yaml               # truncated normal, d=2
+    python localized_cqr.py --config configs/d2.yaml --distribution beta  # beta, d=2
 """
 
 import argparse
 import numpy as np
 import torch
-from typing import Dict, Any
+from typing import Dict, Any, Callable, Tuple
 
 from cqr import (
     ExperimentConfig,
     load_config,
     generate_truncated_normal_data,
+    generate_beta_data,
+    generate_mixture_data,
     get_oracle_bounds,
+    get_oracle_bounds_beta,
+    get_oracle_bounds_mixture,
     compute_conformity_scores,
+    global_calibration,
     LocalConformalOptimizer,
     setup_plotting,
     plot_density_intervals,
@@ -34,15 +42,45 @@ from cqr.models import train_quantile_models
 from cqr.calibration import compute_bandwidth
 
 
-def run_localized_cqr_experiment(config: ExperimentConfig) -> Dict[str, Any]:
-    """
-    Run Localized CQR experiment to demonstrate density-adaptive intervals (Theorem 5).
+# =============================================================================
+# DATA GENERATOR REGISTRY
+# =============================================================================
 
-    Key: Uses kernel-weighted local quantile Q̂_{x,h,1-α} that adapts to
-    the local data density around each test point.
+def get_data_generator(distribution: str) -> Tuple[Callable, Callable, str]:
+    """
+    Get data generator and oracle bounds function for the specified distribution.
+    
+    Returns:
+        (generate_func, oracle_func, display_name)
+    """
+    if distribution == "truncated_normal":
+        return generate_truncated_normal_data, get_oracle_bounds, "Truncated Normal"
+    elif distribution == "beta":
+        return generate_beta_data, get_oracle_bounds_beta, "Beta(2, 5)"
+    elif distribution == "mixture":
+        return generate_mixture_data, get_oracle_bounds_mixture, "Gaussian Mixture"
+    else:
+        raise ValueError(f"Unknown distribution: {distribution}")
+
+
+# =============================================================================
+# MAIN EXPERIMENT
+# =============================================================================
+
+def run_localized_cqr_experiment(
+    config: ExperimentConfig,
+    distribution: str = "truncated_normal"
+) -> Dict[str, Any]:
+    """
+    Run Localized CQR experiment with weighted vs unweighted comparison.
+
+    Computes BOTH:
+    1. Weighted (kernel) intervals - adaptive to local density
+    2. Unweighted (global) intervals - constant Q̂ everywhere
 
     Args:
         config: Experiment configuration
+        distribution: One of 'truncated_normal', 'beta', 'mixture'
 
     Returns:
         Dictionary with results for plotting
@@ -61,30 +99,28 @@ def run_localized_cqr_experiment(config: ExperimentConfig) -> Dict[str, Any]:
     gamma = 1.0  # Assume smooth density
     h = compute_bandwidth(m, config.d, gamma)
 
+    # Get appropriate data generator
+    generate_data, get_oracle, dist_name = get_data_generator(distribution)
+
     print("=" * 60)
-    print("Experiment B: Localized (Kernel) CQR (Theorem 5)")
+    print("Experiment B: Weighted vs Unweighted CQR Comparison")
     print("=" * 60)
-    print(
-        f"Configuration: N={N}, alpha={config.alpha}, beta={config.beta}, d={config.d}"
-    )
+    print(f"Configuration: N={N}, alpha={config.alpha}, beta={config.beta}, d={config.d}")
+    print(f"Distribution: {dist_name}")
     print(f"Bandwidth: h={h:.4f}")
     print("-" * 60)
 
-    # Generate data (truncated normal)
-    X_train, Y_train = generate_truncated_normal_data(
-        n_train, d=config.d, beta=config.beta
-    )
-    X_cal, Y_cal = generate_truncated_normal_data(m, d=config.d, beta=config.beta)
+    # Generate data
+    X_train, Y_train = generate_data(n_train, d=config.d, beta=config.beta)
+    X_cal, Y_cal = generate_data(m, d=config.d, beta=config.beta)
 
     # Test scatter points for visualization
-    X_test_scatter, Y_test_scatter = generate_truncated_normal_data(
-        750, d=config.d, beta=config.beta
-    )
+    X_test_scatter, Y_test_scatter = generate_data(750, d=config.d, beta=config.beta)
 
-    # Sorted grid for smooth interval boundaries (1D only for plotting)
     # Sorted grid for evaluation
     if config.d == 1:
         X_grid = np.linspace(-1, 1, 1000).reshape(-1, 1).astype(np.float32)
+        n_grid = 1000
     elif config.d == 2:
         # For d=2, create a meshgrid for heatmap
         n_grid = 100
@@ -127,10 +163,18 @@ def run_localized_cqr_experiment(config: ExperimentConfig) -> Dict[str, Any]:
 
     scores = compute_conformity_scores(pred_cal_lo, pred_cal_hi, Y_cal)
 
-    # Local conformal calibration
+    # =========================================================================
+    # GLOBAL (UNWEIGHTED) CALIBRATION
+    # =========================================================================
+    Q_hat_global = global_calibration(scores, config.alpha)
+    print(f"Global Q̂ = {Q_hat_global:.4f}")
+
+    # =========================================================================
+    # LOCAL (WEIGHTED) CALIBRATION
+    # =========================================================================
     lcp = LocalConformalOptimizer(X_cal, scores, h=h)
 
-    print(f"Predicting corrections on grid ({len(X_grid)} points)...")
+    print(f"Predicting local corrections on grid ({len(X_grid)} points)...")
 
     # Split X_grid into batches to avoid memory issues with distance matrix
     batch_size = 1000
@@ -159,13 +203,29 @@ def run_localized_cqr_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         pred_grid_lo = model_lo(X_grid_t).numpy().flatten()
         pred_grid_hi = model_hi(X_grid_t).numpy().flatten()
 
-    # Localized CQR interval boundaries
+    # =========================================================================
+    # CONSTRUCT INTERVALS
+    # =========================================================================
+    
+    # Weighted (Localized) CQR interval boundaries
     interval_lo = pred_grid_lo - Q_hat_grid
     interval_hi = pred_grid_hi + Q_hat_grid
 
-    # Oracle boundaries
-    oracle_lo, oracle_hi = get_oracle_bounds(X_grid, config.alpha, config.beta)
+    # Unweighted (Global) CQR interval boundaries - CONSTANT correction
+    interval_lo_global = pred_grid_lo - Q_hat_global
+    interval_hi_global = pred_grid_hi + Q_hat_global
 
+    # Oracle boundaries
+    oracle_lo, oracle_hi = get_oracle(X_grid, config.alpha, config.beta)
+
+    print("-" * 60)
+    
+    # Compute width statistics
+    width_weighted = interval_hi - interval_lo
+    width_global = interval_hi_global - interval_lo_global
+    
+    print(f"Weighted interval width: mean={np.mean(width_weighted):.2f}, std={np.std(width_weighted):.2f}")
+    print(f"Global interval width:   mean={np.mean(width_global):.2f}, std={np.std(width_global):.2f} (constant)")
     print("-" * 60)
 
     # For plotting, use first dimension only if d != 2
@@ -176,21 +236,24 @@ def run_localized_cqr_experiment(config: ExperimentConfig) -> Dict[str, Any]:
         "X_train": X_train[:, 0] if config.d > 1 else X_train.flatten(),
         "interval_lo": interval_lo,
         "interval_hi": interval_hi,
+        "interval_lo_global": interval_lo_global,
+        "interval_hi_global": interval_hi_global,
         "oracle_lo": oracle_lo,
         "oracle_hi": oracle_hi,
+        "distribution": distribution,
     }
 
     if config.d == 2:
         # Add 2D data for heatmap
         width_grid = (interval_hi - interval_lo).reshape(n_grid, n_grid)
-        res.update(
-            {
-                "X1_grid": X1_grid,
-                "X2_grid": X2_grid,
-                "width_grid": width_grid,
-                "X_train": X_train,  # Full 2D X_train
-            }
-        )
+        width_grid_global = (interval_hi_global - interval_lo_global).reshape(n_grid, n_grid)
+        res.update({
+            "X1_grid": X1_grid,
+            "X2_grid": X2_grid,
+            "width_grid": width_grid,
+            "width_grid_global": width_grid_global,
+            "X_train": X_train,  # Full 2D X_train
+        })
 
     return res
 
@@ -204,10 +267,17 @@ def main():
         help="Path to YAML config file (default: use built-in defaults)",
     )
     parser.add_argument(
+        "--distribution",
+        type=str,
+        default="truncated_normal",
+        choices=["truncated_normal", "beta", "mixture"],
+        help="X distribution: truncated_normal, beta, or mixture",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default=None,
-        help="Output PDF path (default: experiment_theorem_5_d{d}.pdf)",
+        help="Output PDF path (default: comparison_d{d}_{distribution}.pdf)",
     )
     args = parser.parse_args()
 
@@ -218,26 +288,29 @@ def main():
     if args.output:
         output_path = args.output
     else:
-        output_path = f"experiment_theorem_5_d{config.d}.pdf"
+        output_path = f"comparison_d{config.d}_{args.distribution}.pdf"
 
     # Run experiment
-    results = run_localized_cqr_experiment(config)
+    results = run_localized_cqr_experiment(config, distribution=args.distribution)
 
-    # Plot density-adaptive intervals
-    # Plot density-adaptive intervals
+    # Get distribution display name for title
+    _, _, dist_name = get_data_generator(args.distribution)
+
+    # Plot comparison
     setup_plotting()
 
     if config.d == 2:
         plot_heatmap_d2(
             results,
             output_path=output_path,
-            title=f"Localized CQR: Interval Width (d={config.d})",
+            title=f"Weighted vs Unweighted CQR (d={config.d}, {dist_name})",
         )
     else:
         plot_density_intervals(
             results,
             output_path=output_path,
-            title=f"Localized CQR: Density-Adaptive Intervals (d={config.d})",
+            title=f"Weighted vs Unweighted CQR (d={config.d}, {dist_name})",
+            distribution=args.distribution,
         )
 
 

@@ -141,9 +141,10 @@ def plot_density_intervals(
     loc: float = 0.0,
     scale: float = 0.5,
     show: bool = True,
+    distribution: str = "truncated_normal",
 ) -> None:
     """
-    Create visualization showing density-adaptive prediction intervals.
+    Create visualization showing weighted vs unweighted prediction intervals.
 
     Main plot: Intervals vs X with scatter overlay
     Subplot: Histogram of X distribution
@@ -154,12 +155,14 @@ def plot_density_intervals(
             - X_test: Test point X values (for scatter)
             - Y_test: Test point Y values (for scatter)
             - X_train: Training X values (for histogram)
-            - interval_lo, interval_hi: Localized CQR interval bounds
+            - interval_lo, interval_hi: Localized (weighted) CQR interval bounds
+            - interval_lo_global, interval_hi_global: Global (unweighted) CQR bounds (optional)
             - oracle_lo, oracle_hi: Oracle interval bounds
         output_path: Path to save the figure
         title: Plot title
-        loc, scale: Parameters of truncated normal (for PDF overlay)
+        loc, scale: Parameters of truncated normal (for PDF overlay, only if distribution='truncated_normal')
         show: Whether to display the plot
+        distribution: Type of X distribution for PDF overlay
     """
     setup_plotting()
 
@@ -172,6 +175,9 @@ def plot_density_intervals(
     oracle_lo = results["oracle_lo"]
     oracle_hi = results["oracle_hi"]
 
+    # Check for global (unweighted) intervals
+    has_global = "interval_lo_global" in results and results["interval_lo_global"] is not None
+
     # Create figure with GridSpec
     fig = plt.figure(figsize=(10, 8))
     gs = GridSpec(2, 1, height_ratios=[3, 1], hspace=0.05)
@@ -179,25 +185,43 @@ def plot_density_intervals(
     # --- MAIN PLOT: INTERVALS ---
     ax_main = fig.add_subplot(gs[0])
 
-    # Fill between for Localized CQR intervals
+    # Fill between for Localized (Weighted) CQR intervals - GREEN
     ax_main.fill_between(
         X_grid,
         interval_lo,
         interval_hi,
         alpha=0.3,
         color="#2ca02c",
-        label="Localized CQR Interval",
+        label="Weighted (Localized) CQR",
     )
-
-    # Localized CQR boundaries
     ax_main.plot(X_grid, interval_lo, color="#2ca02c", linewidth=1.5)
     ax_main.plot(X_grid, interval_hi, color="#2ca02c", linewidth=1.5)
 
-    # Oracle boundaries (dashed)
+    # Global (Unweighted) CQR intervals - RED DASHED
+    if has_global:
+        interval_lo_global = results["interval_lo_global"]
+        interval_hi_global = results["interval_hi_global"]
+        ax_main.plot(
+            X_grid,
+            interval_lo_global,
+            color="#d62728",
+            linestyle="--",
+            linewidth=2,
+            label="Unweighted (Global) CQR",
+        )
+        ax_main.plot(
+            X_grid,
+            interval_hi_global,
+            color="#d62728",
+            linestyle="--",
+            linewidth=2,
+        )
+
+    # Oracle boundaries (blue dotted)
     ax_main.plot(
-        X_grid, oracle_lo, color="#1f77b4", linestyle="--", linewidth=2, label="Oracle"
+        X_grid, oracle_lo, color="#1f77b4", linestyle=":", linewidth=2, label="Oracle"
     )
-    ax_main.plot(X_grid, oracle_hi, color="#1f77b4", linestyle="--", linewidth=2)
+    ax_main.plot(X_grid, oracle_hi, color="#1f77b4", linestyle=":", linewidth=2)
 
     # Scatter plot of test data
     ax_main.scatter(
@@ -221,16 +245,18 @@ def plot_density_intervals(
         X_hist = X_train
 
     ax_hist.hist(
-        X_hist, bins=100, density=True, alpha=0.7, color="#1f77b4", edgecolor="white"
+        X_hist, bins=100, density=True, alpha=0.7, color="#1f77b4", edgecolor="white",
+        label="Data Density"
     )
 
-    # Overlay theoretical PDF of truncated normal
-    x_pdf = np.linspace(-1, 1, 1500)
-    a, b = (-1 - loc) / scale, (1 - loc) / scale
-    pdf_vals = truncnorm.pdf(x_pdf, a, b, loc=loc, scale=scale)
-    ax_hist.plot(
-        x_pdf, pdf_vals, color="#d62728", linewidth=2, label="Truncated Normal PDF"
-    )
+    # Overlay theoretical PDF only for truncated normal
+    if distribution == "truncated_normal":
+        x_pdf = np.linspace(-1, 1, 1500)
+        a, b = (-1 - loc) / scale, (1 - loc) / scale
+        pdf_vals = truncnorm.pdf(x_pdf, a, b, loc=loc, scale=scale)
+        ax_hist.plot(
+            x_pdf, pdf_vals, color="#d62728", linewidth=2, label="Truncated Normal PDF"
+        )
 
     ax_hist.set_xlabel(r"Feature $X$", fontsize=14)
     ax_hist.set_ylabel("Density", fontsize=12)
@@ -257,12 +283,15 @@ def plot_heatmap_d2(
 ) -> None:
     """
     Create a heatmap visualization for d=2 case showing interval width over the domain.
+    
+    If global (unweighted) intervals are provided, creates side-by-side comparison.
 
     Args:
         results: Dictionary with keys:
             - X1_grid: 2D array of X1 coordinates
             - X2_grid: 2D array of X2 coordinates
-            - width_grid: 2D array of interval widths
+            - width_grid: 2D array of interval widths (weighted)
+            - width_grid_global: 2D array of interval widths (unweighted, optional)
             - X_train: Training points (X1, X2) for overlay
         output_path: Path to save the figure
         title: Plot title
@@ -274,40 +303,86 @@ def plot_heatmap_d2(
     X2_grid = results["X2_grid"]
     width_grid = results["width_grid"]
     X_train = results["X_train"]
-
-    fig, ax = plt.subplots(figsize=(8, 7))
-
-    # Heatmap of interval width (Darker = Narrower = Higher Density)
-    # using viridis: Purple (low/narrow) to Yellow (high/wide)
-    c = ax.pcolormesh(
-        X1_grid, X2_grid, width_grid, cmap="viridis", shading="auto", alpha=0.9
-    )
-    cbar = fig.colorbar(c, ax=ax)
-    cbar.set_label("Interval Width (Upper - Lower)", rotation=270, labelpad=20)
-
-    # Overlay training data points
-    ax.scatter(
-        X_train[:, 0],
-        X_train[:, 1],
-        color="white",
-        s=10,
-        alpha=0.3,
-        edgecolor="none",
-        label="Training Data",
-    )
-
-    ax.set_xlabel(r"$X_1$", fontsize=14)
-    ax.set_ylabel(r"$X_2$", fontsize=14)
-    ax.set_title(title, fontsize=16)
     
-    # Legend with dark background for visibility
-    legend = ax.legend(loc="upper right", frameon=True, facecolor="black", framealpha=0.3)
-    for text in legend.get_texts():
-        text.set_color("white")
+    has_global = "width_grid_global" in results and results["width_grid_global"] is not None
 
-    ax.set_xlim(-1, 1)
-    ax.set_ylim(-1, 1)
-    ax.set_aspect("equal")
+    if has_global:
+        # Side-by-side comparison
+        width_grid_global = results["width_grid_global"]
+        
+        # Use same color scale for both
+        vmin = min(width_grid.min(), width_grid_global.min())
+        vmax = max(width_grid.max(), width_grid_global.max())
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # LEFT: Weighted (Localized) CQR
+        c1 = ax1.pcolormesh(
+            X1_grid, X2_grid, width_grid, cmap="viridis", shading="auto", 
+            alpha=0.9, vmin=vmin, vmax=vmax
+        )
+        ax1.scatter(
+            X_train[:, 0], X_train[:, 1],
+            color="white", s=5, alpha=0.2, edgecolor="none"
+        )
+        ax1.set_xlabel(r"$X_1$", fontsize=14)
+        ax1.set_ylabel(r"$X_2$", fontsize=14)
+        ax1.set_title("Weighted (Kernel) CQR", fontsize=14)
+        ax1.set_xlim(-1, 1)
+        ax1.set_ylim(-1, 1)
+        ax1.set_aspect("equal")
+        
+        # RIGHT: Unweighted (Global) CQR
+        c2 = ax2.pcolormesh(
+            X1_grid, X2_grid, width_grid_global, cmap="viridis", shading="auto", 
+            alpha=0.9, vmin=vmin, vmax=vmax
+        )
+        ax2.scatter(
+            X_train[:, 0], X_train[:, 1],
+            color="white", s=5, alpha=0.2, edgecolor="none"
+        )
+        ax2.set_xlabel(r"$X_1$", fontsize=14)
+        ax2.set_ylabel(r"$X_2$", fontsize=14)
+        ax2.set_title("Unweighted (Global) CQR", fontsize=14)
+        ax2.set_xlim(-1, 1)
+        ax2.set_ylim(-1, 1)
+        ax2.set_aspect("equal")
+        
+        # Shared colorbar
+        fig.colorbar(c2, ax=[ax1, ax2], label="Interval Width", shrink=0.8)
+        
+        fig.suptitle(title, fontsize=16, y=1.02)
+    else:
+        # Single heatmap (original behavior)
+        fig, ax = plt.subplots(figsize=(8, 7))
+
+        c = ax.pcolormesh(
+            X1_grid, X2_grid, width_grid, cmap="viridis", shading="auto", alpha=0.9
+        )
+        cbar = fig.colorbar(c, ax=ax)
+        cbar.set_label("Interval Width (Upper - Lower)", rotation=270, labelpad=20)
+
+        ax.scatter(
+            X_train[:, 0],
+            X_train[:, 1],
+            color="white",
+            s=10,
+            alpha=0.3,
+            edgecolor="none",
+            label="Training Data",
+        )
+
+        ax.set_xlabel(r"$X_1$", fontsize=14)
+        ax.set_ylabel(r"$X_2$", fontsize=14)
+        ax.set_title(title, fontsize=16)
+        
+        legend = ax.legend(loc="upper right", frameon=True, facecolor="black", framealpha=0.3)
+        for text in legend.get_texts():
+            text.set_color("white")
+
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        ax.set_aspect("equal")
 
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight")
@@ -318,3 +393,4 @@ def plot_heatmap_d2(
         plt.close()
 
     print(f"\nSaved: {output_path}")
+

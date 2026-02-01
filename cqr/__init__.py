@@ -10,8 +10,12 @@ from .models import QuantileNN, quantile_loss
 from .data import (
     generate_uniform_data,
     generate_truncated_normal_data,
+    generate_beta_data,
+    generate_mixture_data,
     get_oracle_interval_length,
     get_oracle_bounds,
+    get_oracle_bounds_beta,
+    get_oracle_bounds_mixture,
 )
 from .calibration import (
     compute_conformity_scores,
@@ -30,8 +34,12 @@ __all__ = [
     # Data
     "generate_uniform_data",
     "generate_truncated_normal_data",
+    "generate_beta_data",
+    "generate_mixture_data",
     "get_oracle_interval_length",
     "get_oracle_bounds",
+    "get_oracle_bounds_beta",
+    "get_oracle_bounds_mixture",
     # Calibration
     "compute_conformity_scores",
     "global_calibration",
