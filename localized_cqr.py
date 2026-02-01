@@ -47,19 +47,32 @@ from cqr.calibration import compute_bandwidth
 # DATA GENERATOR REGISTRY
 # =============================================================================
 
-def get_data_generator(distribution: str) -> Tuple[Callable, Callable, str]:
+def get_data_generator(distribution: str, dist_params: Dict[str, Any] = None) -> Tuple[Callable, Callable, str]:
     """
     Get data generator and oracle bounds function for the specified distribution.
+    
+    Args:
+        distribution: One of 'truncated_normal', 'beta', 'mixture'
+        dist_params: Dict containing distribution-specific parameters
     
     Returns:
         (generate_func, oracle_func, display_name)
     """
+    if dist_params is None:
+        dist_params = {}
+    
     if distribution == "truncated_normal":
-        return generate_truncated_normal_data, get_oracle_bounds, "Truncated Normal"
+        params = dist_params.get("truncated_normal", {"loc": 0.0, "scale": 0.5})
+        display_name = f"Truncated Normal(loc={params.get('loc', 0.0)}, scale={params.get('scale', 0.5)})"
+        return generate_truncated_normal_data, get_oracle_bounds, display_name
     elif distribution == "beta":
-        return generate_beta_data, get_oracle_bounds_beta, "Beta(2, 5)"
+        params = dist_params.get("beta", {"a": 2.0, "b": 5.0})
+        display_name = f"Beta({params.get('a', 2.0)}, {params.get('b', 5.0)})"
+        return generate_beta_data, get_oracle_bounds_beta, display_name
     elif distribution == "mixture":
-        return generate_mixture_data, get_oracle_bounds_mixture, "Gaussian Mixture"
+        params = dist_params.get("mixture", {"centers": (-0.6, 0.6), "scales": (0.15, 0.15), "weights": (0.5, 0.5)})
+        display_name = f"Gaussian Mixture (centers={params.get('centers', (-0.6, 0.6))})"
+        return generate_mixture_data, get_oracle_bounds_mixture, display_name
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
 
@@ -100,8 +113,25 @@ def run_localized_cqr_experiment(
     gamma = 1.0  # Assume smooth density
     h = compute_bandwidth(m, config.d, gamma, scale=config.bandwidth_scale)
 
-    # Get appropriate data generator
-    generate_data, get_oracle, dist_name = get_data_generator(distribution)
+    # Get appropriate data generator with dist_params
+    generate_data, get_oracle, dist_name = get_data_generator(distribution, config.dist_params)
+    
+    # Extract distribution-specific parameters
+    if distribution == "truncated_normal":
+        params = config.dist_params.get("truncated_normal", {"loc": 0.0, "scale": 0.5})
+        data_kwargs = {"loc": params.get("loc", 0.0), "scale": params.get("scale", 0.5)}
+    elif distribution == "beta":
+        params = config.dist_params.get("beta", {"a": 2.0, "b": 5.0})
+        data_kwargs = {"a": params.get("a", 2.0), "b": params.get("b", 5.0)}
+    elif distribution == "mixture":
+        params = config.dist_params.get("mixture", {"centers": (-0.6, 0.6), "scales": (0.15, 0.15), "weights": (0.5, 0.5)})
+        # Convert lists to tuples if needed (YAML loads as lists)
+        centers = tuple(params.get("centers", (-0.6, 0.6)))
+        scales = tuple(params.get("scales", (0.15, 0.15)))
+        weights = tuple(params.get("weights", (0.5, 0.5)))
+        data_kwargs = {"centers": centers, "scales": scales, "weights": weights}
+    else:
+        data_kwargs = {}
 
     print("=" * 60)
     print("Experiment B: Weighted vs Unweighted CQR Comparison")
@@ -111,12 +141,12 @@ def run_localized_cqr_experiment(
     print(f"Bandwidth: h={h:.4f}")
     print("-" * 60)
 
-    # Generate data
-    X_train, Y_train = generate_data(n_train, d=config.d, beta=config.beta)
-    X_cal, Y_cal = generate_data(m, d=config.d, beta=config.beta)
+    # Generate data with distribution-specific parameters
+    X_train, Y_train = generate_data(n_train, d=config.d, beta=config.beta, **data_kwargs)
+    X_cal, Y_cal = generate_data(m, d=config.d, beta=config.beta, **data_kwargs)
 
     # Test scatter points for visualization
-    X_test_scatter, Y_test_scatter = generate_data(750, d=config.d, beta=config.beta)
+    X_test_scatter, Y_test_scatter = generate_data(750, d=config.d, beta=config.beta, **data_kwargs)
 
     # Sorted grid for evaluation
     if config.d == 1:
@@ -250,7 +280,7 @@ def run_localized_cqr_experiment(
         width_grid_global = (interval_hi_global - interval_lo_global).reshape(n_grid, n_grid)
         
         # Compute density grid for contour overlays
-        density_func = get_density_function(distribution)
+        density_func = get_density_function(distribution, config.dist_params)
         density_values = density_func(X_grid)
         density_grid = density_values.reshape(n_grid, n_grid)
         

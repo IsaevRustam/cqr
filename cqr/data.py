@@ -375,11 +375,14 @@ def generate_mixture_data(
     """
     Generate heteroscedastic regression data with GAUSSIAN MIXTURE X.
 
-    X_i ~ sum_k w_k * TruncatedNormal(center_k, scale_k) on [-1, 1]
+    For EACH dimension independently:
+        X_j ~ sum_k w_k * TruncatedNormal(center_k, scale_k) on [-1, 1]
+    
+    This creates 2^d modes for d dimensions (product of marginals).
     Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
 
-    Default: Two modes at -0.6 and +0.6 with tight variance.
-    This creates sparse regions around x=0 and edges, dense regions at modes.
+    Default: Two modes at -0.6 and +0.6 with tight variance per dimension.
+    For d=2, this creates 4 modes at corners: (-0.6,-0.6), (-0.6,0.6), (0.6,-0.6), (0.6,0.6)
     
     Uses get_ground_truth() for μ(x) and σ(x) - SAME AS UNIFORM!
 
@@ -387,9 +390,9 @@ def generate_mixture_data(
         n: Sample size
         d: Input dimension
         beta: Hölder smoothness parameter
-        centers: Centers of the two mixture components
-        scales: Scales (std) of the two components
-        weights: Mixing weights (sum to 1)
+        centers: Centers of the two mixture components (per marginal)
+        scales: Scales (std) of the two components (per marginal)
+        weights: Mixing weights (sum to 1, per marginal)
         mu_scale: Scaling for the mean function
         sigma_base: Base noise level
         sigma_scale: Scaling for heteroscedastic noise
@@ -398,25 +401,24 @@ def generate_mixture_data(
         X: Features of shape (n, d)
         Y: Targets of shape (n, 1)
     """
-    # Sample component assignments
-    n1 = int(n * weights[0])
-    n2 = n - n1
-
-    X_parts = []
-    for i, (center, scale, count) in enumerate(
-        [(centers[0], scales[0], n1), (centers[1], scales[1], n2)]
-    ):
-        if count == 0:
-            continue
-        # Truncated normal on [-1, 1]
-        a = (-1 - center) / scale
-        b = (1 - center) / scale
-        X_comp = truncnorm.rvs(a, b, loc=center, scale=scale, size=(count, d))
-        X_parts.append(X_comp)
-
-    X = np.vstack(X_parts).astype(np.float32)
-    # Shuffle to mix components
-    np.random.shuffle(X)
+    # Allocate output array
+    X = np.zeros((n, d), dtype=np.float32)
+    
+    # For each dimension INDEPENDENTLY, sample from the mixture
+    for dim in range(d):
+        # Sample component assignments independently for this dimension
+        component = np.random.choice(len(centers), size=n, p=weights)
+        
+        for k, (center, scale) in enumerate(zip(centers, scales)):
+            mask = (component == k)
+            count = mask.sum()
+            if count == 0:
+                continue
+            
+            # Truncated normal on [-1, 1]
+            a = (-1 - center) / scale
+            b = (1 - center) / scale
+            X[mask, dim] = truncnorm.rvs(a, b, loc=center, scale=scale, size=count)
 
     # Use unified ground truth - SAME FUNCTION AS UNIFORM
     mu_x, sigma_x = get_ground_truth(X, beta, mu_scale, sigma_base, sigma_scale)
@@ -555,22 +557,43 @@ def compute_mixture_density(
     return density
 
 
-def get_density_function(distribution: str):
+def get_density_function(distribution: str, dist_params: dict = None):
     """
     Get the density function for a given distribution type.
     
     Args:
         distribution: One of 'truncated_normal', 'beta', 'mixture'
+        dist_params: Dict containing distribution-specific parameters (optional)
         
     Returns:
         density_func: Function that takes X and returns density values
     """
+    from functools import partial
+    
+    if dist_params is None:
+        dist_params = {}
+    
     if distribution == "truncated_normal":
-        return compute_truncated_normal_density
+        params = dist_params.get("truncated_normal", {"loc": 0.0, "scale": 0.5})
+        return partial(compute_truncated_normal_density, 
+                      loc=params.get("loc", 0.0), 
+                      scale=params.get("scale", 0.5))
     elif distribution == "beta":
-        return compute_beta_density
+        params = dist_params.get("beta", {"a": 2.0, "b": 5.0})
+        return partial(compute_beta_density, 
+                      a=params.get("a", 2.0), 
+                      b=params.get("b", 5.0))
     elif distribution == "mixture":
-        return compute_mixture_density
+        params = dist_params.get("mixture", {"centers": (-0.6, 0.6), "scales": (0.15, 0.15), "weights": (0.5, 0.5)})
+        # Convert lists to tuples if needed (YAML loads as lists)
+        centers = tuple(params.get("centers", (-0.6, 0.6)))
+        scales = tuple(params.get("scales", (0.15, 0.15)))
+        weights = tuple(params.get("weights", (0.5, 0.5)))
+        return partial(compute_mixture_density, 
+                      centers=centers, 
+                      scales=scales, 
+                      weights=weights)
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
+
 
