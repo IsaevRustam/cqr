@@ -52,6 +52,9 @@ class ExperimentConfig:
     # Fixed sample size (for localized experiments)
     n_fixed: int = 20000
 
+    # Bandwidth scale factor for localized CQR
+    bandwidth_scale: float = 6.0
+
     # Test set size
     n_test: int = 1000
 

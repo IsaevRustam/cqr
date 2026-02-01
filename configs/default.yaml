@@ -23,6 +23,10 @@ n_grid_num: 15
 # Fixed sample size (for localized experiments)
 n_fixed: 20000
 
+# Bandwidth scale factor for localized CQR
+# Inflates bandwidth h = scale * m^{-1/(2γ+d)} to ensure neighbors in sparse regions
+bandwidth_scale: 6.0
+
 # Test set size
 n_test: 1000
 

@@ -95,9 +95,9 @@ def run_localized_cqr_experiment(
     n_train = N // 2
     m = N - n_train
 
-    # Bandwidth: h ~ m^{-1/(2γ+d)}, where γ is Hölder constant of density
+    # Bandwidth: h = scale * m^{-1/(2γ+d)}, where γ is Hölder constant of density
     gamma = 1.0  # Assume smooth density
-    h = compute_bandwidth(m, config.d, gamma)
+    h = compute_bandwidth(m, config.d, gamma, scale=config.bandwidth_scale)
 
     # Get appropriate data generator
     generate_data, get_oracle, dist_name = get_data_generator(distribution)
