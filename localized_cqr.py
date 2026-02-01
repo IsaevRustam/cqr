@@ -37,6 +37,7 @@ from cqr import (
     setup_plotting,
     plot_density_intervals,
     plot_heatmap_d2,
+    get_density_function,
 )
 from cqr.models import train_quantile_models
 from cqr.calibration import compute_bandwidth
@@ -247,12 +248,19 @@ def run_localized_cqr_experiment(
         # Add 2D data for heatmap
         width_grid = (interval_hi - interval_lo).reshape(n_grid, n_grid)
         width_grid_global = (interval_hi_global - interval_lo_global).reshape(n_grid, n_grid)
+        
+        # Compute density grid for contour overlays
+        density_func = get_density_function(distribution)
+        density_values = density_func(X_grid)
+        density_grid = density_values.reshape(n_grid, n_grid)
+        
         res.update({
             "X1_grid": X1_grid,
             "X2_grid": X2_grid,
             "width_grid": width_grid,
             "width_grid_global": width_grid_global,
             "X_train": X_train,  # Full 2D X_train
+            "density_grid": density_grid,  # For beautiful contour overlays
         })
 
     return res

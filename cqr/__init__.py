@@ -18,6 +18,10 @@ from .data import (
     get_oracle_bounds,
     get_oracle_bounds_beta,
     get_oracle_bounds_mixture,
+    compute_truncated_normal_density,
+    compute_beta_density,
+    compute_mixture_density,
+    get_density_function,
 )
 from .calibration import (
     compute_conformity_scores,
@@ -44,6 +48,10 @@ __all__ = [
     "get_oracle_bounds",
     "get_oracle_bounds_beta",
     "get_oracle_bounds_mixture",
+    "compute_truncated_normal_density",
+    "compute_beta_density",
+    "compute_mixture_density",
+    "get_density_function",
     # Calibration
     "compute_conformity_scores",
     "global_calibration",

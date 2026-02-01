@@ -441,3 +441,136 @@ def get_oracle_bounds_mixture(
     Uses the unified get_ground_truth() function - SAME AS ALL OTHERS.
     """
     return get_oracle_bounds_generic(X, alpha, beta, mu_scale, sigma_base, sigma_scale)
+
+
+# =============================================================================
+# DENSITY COMPUTATION FUNCTIONS (FOR CONTOUR PLOTS)
+# =============================================================================
+
+
+def compute_truncated_normal_density(
+    X: np.ndarray,
+    loc: float = 0.0,
+    scale: float = 0.5,
+) -> np.ndarray:
+    """
+    Compute the true PDF of the truncated normal distribution at given points.
+    
+    For d > 1, computes the product of marginal densities (independent dimensions).
+    
+    Args:
+        X: Points of shape (n, d) where to evaluate density
+        loc: Mean of the underlying normal
+        scale: Std of the underlying normal
+        
+    Returns:
+        density: Array of shape (n,) with density values
+    """
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    
+    a = (-1 - loc) / scale
+    b = (1 - loc) / scale
+    
+    # Product of marginal densities
+    density = np.ones(X.shape[0])
+    for dim in range(X.shape[1]):
+        density *= truncnorm.pdf(X[:, dim], a, b, loc=loc, scale=scale)
+    
+    return density
+
+
+def compute_beta_density(
+    X: np.ndarray,
+    a: float = 2.0,
+    b: float = 5.0,
+) -> np.ndarray:
+    """
+    Compute the true PDF of the Beta distribution (scaled to [-1,1]) at given points.
+    
+    For d > 1, computes the product of marginal densities (independent dimensions).
+    
+    Args:
+        X: Points of shape (n, d) in [-1, 1]
+        a, b: Beta distribution parameters
+        
+    Returns:
+        density: Array of shape (n,) with density values
+    """
+    from scipy.stats import beta as beta_dist
+    
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    
+    # Transform from [-1, 1] to [0, 1]
+    X_01 = (X + 1) / 2
+    
+    # Product of marginal densities (with Jacobian 1/2 for each dimension)
+    density = np.ones(X.shape[0])
+    for dim in range(X.shape[1]):
+        # PDF on [0,1] divided by 2 (Jacobian of x -> 2x - 1)
+        density *= beta_dist.pdf(X_01[:, dim], a, b) / 2
+    
+    return density
+
+
+def compute_mixture_density(
+    X: np.ndarray,
+    centers: Tuple[float, float] = (-0.6, 0.6),
+    scales: Tuple[float, float] = (0.15, 0.15),
+    weights: Tuple[float, float] = (0.5, 0.5),
+) -> np.ndarray:
+    """
+    Compute the true PDF of the Gaussian mixture distribution at given points.
+    
+    For d > 1, computes the product of marginal densities (independent dimensions).
+    Each marginal is a mixture of two truncated normals.
+    
+    Args:
+        X: Points of shape (n, d) in [-1, 1]
+        centers: Centers of the two mixture components
+        scales: Scales (std) of the two components
+        weights: Mixing weights (sum to 1)
+        
+    Returns:
+        density: Array of shape (n,) with density values
+    """
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    
+    # Product of marginal densities
+    density = np.ones(X.shape[0])
+    
+    for dim in range(X.shape[1]):
+        x_dim = X[:, dim]
+        marginal_density = np.zeros(X.shape[0])
+        
+        for center, scale, weight in zip(centers, scales, weights):
+            a = (-1 - center) / scale
+            b = (1 - center) / scale
+            marginal_density += weight * truncnorm.pdf(x_dim, a, b, loc=center, scale=scale)
+        
+        density *= marginal_density
+    
+    return density
+
+
+def get_density_function(distribution: str):
+    """
+    Get the density function for a given distribution type.
+    
+    Args:
+        distribution: One of 'truncated_normal', 'beta', 'mixture'
+        
+    Returns:
+        density_func: Function that takes X and returns density values
+    """
+    if distribution == "truncated_normal":
+        return compute_truncated_normal_density
+    elif distribution == "beta":
+        return compute_beta_density
+    elif distribution == "mixture":
+        return compute_mixture_density
+    else:
+        raise ValueError(f"Unknown distribution: {distribution}")
+

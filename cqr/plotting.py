@@ -278,11 +278,15 @@ def plot_density_intervals(
 def plot_heatmap_d2(
     results: Dict[str, Any],
     output_path: str = "density_heatmap_d2.pdf",
-    title: str = "Localized CQR: Interval Width Heatmap (d=2)",
+    title: str = "Localized CQR: Interval Width (d=2)",
     show: bool = True,
+    add_density_contours: bool = True,
 ) -> None:
     """
-    Create a heatmap visualization for d=2 case showing interval width over the domain.
+    Create a beautiful heatmap visualization for d=2 case showing interval width over the domain.
+    
+    Uses smooth contourf visualization with a blue colormap (YlGnBu_r) and optional
+    white dashed density contours showing probability levels.
     
     If global (unweighted) intervals are provided, creates side-by-side comparison.
 
@@ -292,22 +296,24 @@ def plot_heatmap_d2(
             - X2_grid: 2D array of X2 coordinates
             - width_grid: 2D array of interval widths (weighted)
             - width_grid_global: 2D array of interval widths (unweighted, optional)
-            - X_train: Training points (X1, X2) for overlay
+            - X_train: Training points (X1, X2) for overlay (optional, not plotted)
+            - density_grid: 2D array of true density values (optional, for contours)
         output_path: Path to save the figure
         title: Plot title
         show: Whether to display the plot
+        add_density_contours: Whether to add density contour overlays
     """
     setup_plotting()
 
     X1_grid = results["X1_grid"]
     X2_grid = results["X2_grid"]
     width_grid = results["width_grid"]
-    X_train = results["X_train"]
     
     has_global = "width_grid_global" in results and results["width_grid_global"] is not None
+    has_density = "density_grid" in results and results["density_grid"] is not None
 
     if has_global:
-        # Side-by-side comparison
+        # Side-by-side comparison with beautiful styling
         width_grid_global = results["width_grid_global"]
         
         # Use same color scale for both
@@ -316,15 +322,32 @@ def plot_heatmap_d2(
         
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
         
-        # LEFT: Weighted (Localized) CQR
-        c1 = ax1.pcolormesh(
-            X1_grid, X2_grid, width_grid, cmap="viridis", shading="auto", 
-            alpha=0.9, vmin=vmin, vmax=vmax
+        # Number of contour levels for smooth appearance
+        levels = 50
+        
+        # LEFT: Weighted (Localized) CQR - Beautiful blue heatmap
+        c1 = ax1.contourf(
+            X1_grid, X2_grid, width_grid, 
+            levels=levels, cmap="YlGnBu_r", 
+            vmin=vmin, vmax=vmax
         )
-        ax1.scatter(
-            X_train[:, 0], X_train[:, 1],
-            color="white", s=5, alpha=0.2, edgecolor="none"
-        )
+        
+        # Add density contours if available
+        if has_density and add_density_contours:
+            density_grid = results["density_grid"]
+            # Normalize density to probabilities
+            density_max = density_grid.max()
+            prob_levels = [0.08, 0.16, 0.24, 0.32, 0.40, 0.48, 0.56, 0.64]
+            contour_levels = [p * density_max for p in prob_levels]
+            cs1 = ax1.contour(
+                X1_grid, X2_grid, density_grid,
+                levels=contour_levels, colors='white', 
+                linestyles='dashed', linewidths=1.2, alpha=0.8
+            )
+            # Add labels
+            fmt = {lev: f'p={prob:.2f}' for lev, prob in zip(contour_levels, prob_levels)}
+            ax1.clabel(cs1, inline=True, fontsize=8, fmt=fmt)
+        
         ax1.set_xlabel(r"$X_1$", fontsize=14)
         ax1.set_ylabel(r"$X_2$", fontsize=14)
         ax1.set_title("Weighted (Kernel) CQR", fontsize=14)
@@ -332,15 +355,22 @@ def plot_heatmap_d2(
         ax1.set_ylim(-1, 1)
         ax1.set_aspect("equal")
         
-        # RIGHT: Unweighted (Global) CQR
-        c2 = ax2.pcolormesh(
-            X1_grid, X2_grid, width_grid_global, cmap="viridis", shading="auto", 
-            alpha=0.9, vmin=vmin, vmax=vmax
+        # RIGHT: Unweighted (Global) CQR - Beautiful blue heatmap
+        c2 = ax2.contourf(
+            X1_grid, X2_grid, width_grid_global, 
+            levels=levels, cmap="YlGnBu_r", 
+            vmin=vmin, vmax=vmax
         )
-        ax2.scatter(
-            X_train[:, 0], X_train[:, 1],
-            color="white", s=5, alpha=0.2, edgecolor="none"
-        )
+        
+        # Add density contours if available
+        if has_density and add_density_contours:
+            cs2 = ax2.contour(
+                X1_grid, X2_grid, density_grid,
+                levels=contour_levels, colors='white', 
+                linestyles='dashed', linewidths=1.2, alpha=0.8
+            )
+            ax2.clabel(cs2, inline=True, fontsize=8, fmt=fmt)
+        
         ax2.set_xlabel(r"$X_1$", fontsize=14)
         ax2.set_ylabel(r"$X_2$", fontsize=14)
         ax2.set_title("Unweighted (Global) CQR", fontsize=14)
@@ -348,44 +378,67 @@ def plot_heatmap_d2(
         ax2.set_ylim(-1, 1)
         ax2.set_aspect("equal")
         
-        # Shared colorbar
-        fig.colorbar(c2, ax=[ax1, ax2], label="Interval Width", shrink=0.8)
+        # Shared colorbar with nice styling
+        cbar = fig.colorbar(c2, ax=[ax1, ax2], label=r"Interval Width $|\hat{\mathcal{C}}(x)|$", shrink=0.8)
+        
+        # Add density contour legend if present
+        if has_density and add_density_contours:
+            from matplotlib.lines import Line2D
+            legend_elements = [Line2D([0], [0], color='white', linestyle='--', 
+                                      label='True Density Contours')]
+            ax2.legend(handles=legend_elements, loc='upper right', 
+                      facecolor='gray', framealpha=0.5, fontsize=10)
         
         fig.suptitle(title, fontsize=16, y=1.02)
     else:
-        # Single heatmap (original behavior)
-        fig, ax = plt.subplots(figsize=(8, 7))
+        # Single beautiful blue heatmap
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Number of contour levels for smooth appearance
+        levels = 50
 
-        c = ax.pcolormesh(
-            X1_grid, X2_grid, width_grid, cmap="viridis", shading="auto", alpha=0.9
+        # Create smooth contourf heatmap with blue colormap
+        c = ax.contourf(
+            X1_grid, X2_grid, width_grid, 
+            levels=levels, cmap="YlGnBu_r"
         )
-        cbar = fig.colorbar(c, ax=ax)
-        cbar.set_label("Interval Width (Upper - Lower)", rotation=270, labelpad=20)
-
-        ax.scatter(
-            X_train[:, 0],
-            X_train[:, 1],
-            color="white",
-            s=10,
-            alpha=0.3,
-            edgecolor="none",
-            label="Training Data",
-        )
-
+        
+        # Add density contours if available
+        if has_density and add_density_contours:
+            density_grid = results["density_grid"]
+            # Normalize density to probabilities
+            density_max = density_grid.max()
+            prob_levels = [0.08, 0.16, 0.24, 0.32, 0.40, 0.48, 0.56, 0.64]
+            contour_levels = [p * density_max for p in prob_levels]
+            cs = ax.contour(
+                X1_grid, X2_grid, density_grid,
+                levels=contour_levels, colors='white', 
+                linestyles='dashed', linewidths=1.5, alpha=0.9
+            )
+            # Add probability labels to contours
+            fmt = {lev: f'p={prob:.2f}' for lev, prob in zip(contour_levels, prob_levels)}
+            ax.clabel(cs, inline=True, fontsize=9, fmt=fmt)
+            
+            # Add legend for density contours
+            from matplotlib.lines import Line2D
+            legend_elements = [Line2D([0], [0], color='white', linestyle='--', 
+                                      linewidth=1.5, label='True Density Contours')]
+            ax.legend(handles=legend_elements, loc='upper right', 
+                     facecolor='gray', framealpha=0.5, fontsize=11)
+        
+        # Create colorbar with nice formatting
+        cbar = fig.colorbar(c, ax=ax, shrink=0.9, pad=0.02)
+        cbar.set_label(r"Interval Width $|\hat{\mathcal{C}}(x)|$", fontsize=13, rotation=270, labelpad=25)
+        
         ax.set_xlabel(r"$X_1$", fontsize=14)
         ax.set_ylabel(r"$X_2$", fontsize=14)
         ax.set_title(title, fontsize=16)
-        
-        legend = ax.legend(loc="upper right", frameon=True, facecolor="black", framealpha=0.3)
-        for text in legend.get_texts():
-            text.set_color("white")
-
         ax.set_xlim(-1, 1)
         ax.set_ylim(-1, 1)
         ax.set_aspect("equal")
 
     plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
+    plt.savefig(output_path, bbox_inches="tight", dpi=150)
 
     if show:
         plt.show()
