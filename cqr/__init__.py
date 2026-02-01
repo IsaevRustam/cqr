@@ -8,6 +8,8 @@ for arbitrary input dimensions d ∈ {1, 2, ...}.
 from .config import ExperimentConfig, load_config
 from .models import QuantileNN, quantile_loss
 from .data import (
+    get_ground_truth,
+    get_oracle_bounds_generic,
     generate_uniform_data,
     generate_truncated_normal_data,
     generate_beta_data,
@@ -32,6 +34,8 @@ __all__ = [
     "QuantileNN",
     "quantile_loss",
     # Data
+    "get_ground_truth",
+    "get_oracle_bounds_generic",
     "generate_uniform_data",
     "generate_truncated_normal_data",
     "generate_beta_data",
