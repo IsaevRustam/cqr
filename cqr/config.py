@@ -67,10 +67,10 @@ class ExperimentConfig:
     
     # Distribution parameters (configurable per distribution)
     dist_params: Dict[str, Any] = field(default_factory=lambda: {
-        "truncated_normal": {"loc": 0.0, "scale": 0.5},
+        "truncated_normal": {"loc": 0.5, "scale": 0.5},
         "beta": {"a": 2.0, "b": 5.0},
         "mixture": {
-            "centers": (-0.6, 0.6),
+            "centers": (0.2, 0.8),
             "scales": (0.15, 0.15),
             "weights": (0.5, 0.5)
         }

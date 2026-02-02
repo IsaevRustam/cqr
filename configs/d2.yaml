@@ -4,7 +4,7 @@
 # Core experiment parameters
 alpha: 0.05
 beta: 1.0
-d: 2                 # 2D input space: [-1,1]^2
+d: 2                 # 2D input space: [0,1]^2
 seed: 42
 
 # Monte Carlo settings

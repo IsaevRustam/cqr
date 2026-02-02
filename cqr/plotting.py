@@ -231,7 +231,7 @@ def plot_density_intervals(
     ax_main.set_ylabel(r"Target $Y$", fontsize=14)
     ax_main.set_title(title, fontsize=16)
     ax_main.legend(loc="upper left", fontsize=11)
-    ax_main.set_xlim(-1.15, 1.15)
+    ax_main.set_xlim(-0.05, 1.05)
     ax_main.tick_params(labelbottom=False)  # Hide x labels for top plot
     ax_main.grid(True, alpha=0.3)
 
@@ -251,8 +251,8 @@ def plot_density_intervals(
 
     # Overlay theoretical PDF only for truncated normal
     if distribution == "truncated_normal":
-        x_pdf = np.linspace(-1, 1, 1500)
-        a, b = (-1 - loc) / scale, (1 - loc) / scale
+        x_pdf = np.linspace(0, 1, 1500)
+        a, b = (0 - loc) / scale, (1 - loc) / scale
         pdf_vals = truncnorm.pdf(x_pdf, a, b, loc=loc, scale=scale)
         ax_hist.plot(
             x_pdf, pdf_vals, color="#d62728", linewidth=2, label="Truncated Normal PDF"
@@ -261,7 +261,7 @@ def plot_density_intervals(
     ax_hist.set_xlabel(r"Feature $X$", fontsize=14)
     ax_hist.set_ylabel("Density", fontsize=12)
     ax_hist.legend(loc="upper right", fontsize=10)
-    ax_hist.set_xlim(-1.15, 1.15)
+    ax_hist.set_xlim(-0.05, 1.05)
     ax_hist.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -275,7 +275,7 @@ def plot_density_intervals(
     print(f"\nSaved: {output_path}")
 
 
-def plot_heatmap_d2(
+def plot_heatmap_d2321(
     results: Dict[str, Any],
     output_path: str = "density_heatmap_d2.pdf",
     title: str = "Localized CQR: Interval Width (d=2)",
@@ -351,8 +351,8 @@ def plot_heatmap_d2(
         ax1.set_xlabel(r"$X_1$", fontsize=14)
         ax1.set_ylabel(r"$X_2$", fontsize=14)
         ax1.set_title("Weighted (Kernel) CQR", fontsize=14)
-        ax1.set_xlim(-1, 1)
-        ax1.set_ylim(-1, 1)
+        ax1.set_xlim(0, 1)
+        ax1.set_ylim(0, 1)
         ax1.set_aspect("equal")
         
         # RIGHT: Unweighted (Global) CQR - Beautiful blue heatmap
@@ -374,8 +374,8 @@ def plot_heatmap_d2(
         ax2.set_xlabel(r"$X_1$", fontsize=14)
         ax2.set_ylabel(r"$X_2$", fontsize=14)
         ax2.set_title("Unweighted (Global) CQR", fontsize=14)
-        ax2.set_xlim(-1, 1)
-        ax2.set_ylim(-1, 1)
+        ax2.set_xlim(0, 1)
+        ax2.set_ylim(0, 1)
         ax2.set_aspect("equal")
         
         # Shared colorbar with nice styling
@@ -433,8 +433,8 @@ def plot_heatmap_d2(
         ax.set_xlabel(r"$X_1$", fontsize=14)
         ax.set_ylabel(r"$X_2$", fontsize=14)
         ax.set_title(title, fontsize=16)
-        ax.set_xlim(-1, 1)
-        ax.set_ylim(-1, 1)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
         ax.set_aspect("equal")
 
     plt.tight_layout()
@@ -447,3 +447,107 @@ def plot_heatmap_d2(
 
     print(f"\nSaved: {output_path}")
 
+ 
+def plot_heatmap_d2(
+    results: Dict[str, Any],
+    output_path: str = "density_heatmap_d2.pdf",
+    title: str = "Localized CQR: Interval Width (d=2)",
+    show: bool = True,
+    add_density_contours: bool = True,
+) -> None:
+    """
+    Fixed heatmap visualization with correct colorbar placement.
+    """
+    setup_plotting()
+
+    X1_grid = results["X1_grid"]
+    X2_grid = results["X2_grid"]
+    width_grid = results["width_grid"]
+    
+    has_global = "width_grid_global" in results and results["width_grid_global"] is not None
+    has_density = "density_grid" in results and results["density_grid"] is not None
+
+    # Determine common vmin/vmax for consistent coloring
+    if has_global:
+        width_grid_global = results["width_grid_global"]
+        vmin = min(width_grid.min(), width_grid_global.min())
+        vmax = max(width_grid.max(), width_grid_global.max())
+    else:
+        vmin, vmax = width_grid.min(), width_grid.max()
+
+    levels = 50
+    
+    # Setup figure
+    if has_global:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+        axes = [ax1, ax2]
+    else:
+        fig, ax1 = plt.subplots(1, 1, figsize=(9, 7))
+        axes = [ax1]
+
+    # --- PLOT 1: Weighted ---
+    c1 = axes[0].contourf(
+        X1_grid, X2_grid, width_grid, 
+        levels=levels, cmap="YlGnBu_r", 
+        vmin=vmin, vmax=vmax
+    )
+    axes[0].set_title("Weighted (Kernel) CQR", fontsize=16)
+    
+    # --- PLOT 2: Unweighted (if exists) ---
+    if has_global:
+        c2 = axes[1].contourf(
+            X1_grid, X2_grid, width_grid_global, 
+            levels=levels, cmap="YlGnBu_r", 
+            vmin=vmin, vmax=vmax
+        )
+        axes[1].set_title("Unweighted (Global) CQR", fontsize=16)
+
+    # --- Common styling & Contours ---
+    for ax in axes:
+        ax.set_xlabel(r"$X_1$", fontsize=14)
+        ax.set_ylabel(r"$X_2$", fontsize=14)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_aspect("equal")
+        
+        if has_density and add_density_contours:
+            density_grid = results["density_grid"]
+            density_max = density_grid.max()
+            # Levels relative to max density
+            prob_levels = [0.1, 0.3, 0.5, 0.7, 0.9] 
+            contour_levels = [p * density_max for p in prob_levels]
+            
+            cs = ax.contour(
+                X1_grid, X2_grid, density_grid,
+                levels=contour_levels, colors='white', 
+                linestyles='dashed', linewidths=1.0, alpha=0.7
+            )
+            ax.clabel(cs, inline=True, fontsize=8, fmt='%.2f')
+
+    # --- COLORBAR FIX ---
+    # Adjust subplots to leave room on the right
+    fig.subplots_adjust(right=0.85, wspace=0.2)
+    
+    # Add a specific axis for the colorbar [left, bottom, width, height]
+    # Coordinates are fraction of figure (0 to 1)
+    cbar_ax = fig.add_axes([0.87, 0.15, 0.02, 0.7])
+    
+    # Draw colorbar
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+    sm = plt.cm.ScalarMappable(cmap="YlGnBu_r", norm=norm)
+    sm.set_array([])
+    
+    cbar = fig.colorbar(sm, cax=cbar_ax)
+    cbar.set_label(r"Interval Width $|\hat{\mathcal{C}}(x)|$", fontsize=14, labelpad=10)
+
+    # Title adjustment
+    fig.suptitle(title, fontsize=18, y=0.96)
+
+    plt.savefig(output_path, bbox_inches="tight", dpi=150)
+    
+    if show:
+        plt.show()
+    else:
+        plt.close()
+    
+    print(f"\nSaved: {output_path}")
