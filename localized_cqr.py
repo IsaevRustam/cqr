@@ -150,20 +150,20 @@ def run_localized_cqr_experiment(
 
     # Sorted grid for evaluation
     if config.d == 1:
-        X_grid = np.linspace(0, 1, 1000).reshape(-1, 1).astype(np.float32)
+        X_grid = np.linspace(-1, 1, 1000).reshape(-1, 1).astype(np.float32)
         n_grid = 1000
     elif config.d == 2:
         # For d=2, create a meshgrid for heatmap
         n_grid = 100
-        x1 = np.linspace(0, 1, n_grid)
-        x2 = np.linspace(0, 1, n_grid)
+        x1 = np.linspace(-1, 1, n_grid)
+        x2 = np.linspace(-1, 1, n_grid)
         X1_grid, X2_grid = np.meshgrid(x1, x2)
 
         # Flatten for model prediction -> shape (10000, 2)
         X_grid = np.column_stack([X1_grid.ravel(), X2_grid.ravel()]).astype(np.float32)
     else:
         # For other multi-d, project onto first axis
-        X_grid = np.linspace(0, 1, 1000).reshape(-1, 1).astype(np.float32)
+        X_grid = np.linspace(-1, 1, 1000).reshape(-1, 1).astype(np.float32)
         # Pad with zeros for other dimensions to evaluate at x_2=...=x_d=0
         X_grid = np.hstack(
             [X_grid] + [np.zeros((1000, 1), dtype=np.float32)] * (config.d - 1)

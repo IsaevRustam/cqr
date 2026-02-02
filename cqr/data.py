@@ -114,7 +114,7 @@ def generate_uniform_data(
     """
     Generate heteroscedastic regression data with uniform X.
 
-    X ~ Uniform[0, 1]^d
+    X ~ Uniform[-1, 1]^d
     Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
 
     Uses get_ground_truth() for μ(x) and σ(x).
@@ -131,7 +131,7 @@ def generate_uniform_data(
         X: Features of shape (n, d)
         Y: Targets of shape (n, 1)
     """
-    X = np.random.uniform(0, 1, (n, d)).astype(np.float32)
+    X = np.random.uniform(-1, 1, (n, d)).astype(np.float32)
     
     # Use unified ground truth
     mu_x, sigma_x = get_ground_truth(X, beta, mu_scale, sigma_base, sigma_scale)
@@ -189,7 +189,7 @@ def generate_truncated_normal_data(
     """
     Generate heteroscedastic regression data with TRUNCATED NORMAL X.
 
-    X_i ~ TruncatedNormal(loc, scale) on [0, 1] independently for each dimension.
+    X_i ~ TruncatedNormal(loc, scale) on [-1, 1] independently for each dimension.
     Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
 
     Uses get_ground_truth() for μ(x) and σ(x) - SAME as uniform!
@@ -209,7 +209,7 @@ def generate_truncated_normal_data(
         Y: Targets of shape (n, 1)
     """
     # Standardized bounds for truncnorm
-    a = (0 - loc) / scale
+    a = (-1 - loc) / scale
     b = (1 - loc) / scale
 
     # Generate each dimension independently
@@ -248,7 +248,7 @@ def get_oracle_bounds(
 
 def generate_test_grid(d: int, n_per_dim: int = 50) -> np.ndarray:
     """
-    Generate a regular grid on [0, 1]^d for evaluation.
+    Generate a regular grid on [-1, 1]^d for evaluation.
 
     For d=1: linspace
     For d>1: meshgrid flattened
@@ -261,10 +261,10 @@ def generate_test_grid(d: int, n_per_dim: int = 50) -> np.ndarray:
         X_grid of shape (n_per_dim^d, d) — warning: grows exponentially!
     """
     if d == 1:
-        return np.linspace(0, 1, n_per_dim).reshape(-1, 1).astype(np.float32)
+        return np.linspace(-1, 1, n_per_dim).reshape(-1, 1).astype(np.float32)
 
     # For higher dimensions, use meshgrid
-    axes = [np.linspace(0, 1, n_per_dim) for _ in range(d)]
+    axes = [np.linspace(-1, 1, n_per_dim) for _ in range(d)]
     grids = np.meshgrid(*axes, indexing="ij")
     X_grid = np.stack([g.flatten() for g in grids], axis=1).astype(np.float32)
 
@@ -273,7 +273,7 @@ def generate_test_grid(d: int, n_per_dim: int = 50) -> np.ndarray:
 
 def generate_random_test_points(n: int, d: int) -> np.ndarray:
     """
-    Generate random test points uniformly on [0, 1]^d.
+    Generate random test points uniformly on [-1, 1]^d.
 
     Preferred over grid for high dimensions to avoid exponential blowup.
 
@@ -284,7 +284,7 @@ def generate_random_test_points(n: int, d: int) -> np.ndarray:
     Returns:
         X_test of shape (n, d)
     """
-    return np.random.uniform(0, 1, (n, d)).astype(np.float32)
+    return np.random.uniform(-1, 1, (n, d)).astype(np.float32)
 
 
 # =============================================================================
@@ -305,10 +305,10 @@ def generate_beta_data(
     """
     Generate heteroscedastic regression data with BETA distribution X.
 
-    X_i ~ Beta(a, b) scaled to [0, 1] independently for each dimension.
+    X_i ~ Beta(a, b) scaled to [-1, 1] independently for each dimension.
     Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
 
-    With a=2, b=5: High density on the LEFT side (0), low on the right (1).
+    With a=2, b=5: High density on the LEFT side (-1), low on the right (+1).
     
     Uses get_ground_truth() for μ(x) and σ(x) - SAME AS UNIFORM!
 
@@ -327,8 +327,9 @@ def generate_beta_data(
     """
     from scipy.stats import beta as beta_dist
 
-    # Generate Beta(a, b) on [0, 1] - already in correct domain
-    X = beta_dist.rvs(a, b, size=(n, d)).astype(np.float32)  # Already [0, 1]
+    # Generate Beta(a, b) on [0, 1] then scale to [-1, 1]
+    X_01 = beta_dist.rvs(a, b, size=(n, d))
+    X = (2 * X_01 - 1).astype(np.float32)  # Scale to [-1, 1]
 
     # Use unified ground truth - SAME FUNCTION AS UNIFORM
     mu_x, sigma_x = get_ground_truth(X, beta, mu_scale, sigma_base, sigma_scale)
@@ -375,7 +376,7 @@ def generate_mixture_data(
     Generate heteroscedastic regression data with GAUSSIAN MIXTURE X.
 
     For EACH dimension independently:
-        X_j ~ sum_k w_k * TruncatedNormal(center_k, scale_k) on [0, 1]
+        X_j ~ sum_k w_k * TruncatedNormal(center_k, scale_k) on [-1, 1]
     
     This creates 2^d modes for d dimensions (product of marginals).
     Y = μ(X) + σ(X) * ε, where ε ~ N(0, 1)
@@ -414,8 +415,8 @@ def generate_mixture_data(
             if count == 0:
                 continue
             
-            # Truncated normal on [0, 1]
-            a = (0 - center) / scale
+            # Truncated normal on [-1, 1]
+            a = (-1 - center) / scale
             b = (1 - center) / scale
             X[mask, dim] = truncnorm.rvs(a, b, loc=center, scale=scale, size=count)
 
@@ -503,13 +504,14 @@ def compute_beta_density(
     if X.ndim == 1:
         X = X.reshape(-1, 1)
     
-    # X is already in [0, 1] domain
+    # Transform from [-1, 1] to [0, 1]
+    X_01 = (X + 1) / 2
     
-    # Product of marginal densities
+    # Product of marginal densities (with Jacobian 1/2 for each dimension)
     density = np.ones(X.shape[0])
     for dim in range(X.shape[1]):
-        # PDF on [0,1] - no Jacobian needed
-        density *= beta_dist.pdf(X[:, dim], a, b)
+        # PDF on [0,1] divided by 2 (Jacobian of x -> 2x - 1)
+        density *= beta_dist.pdf(X_01[:, dim], a, b) / 2
     
     return density
 

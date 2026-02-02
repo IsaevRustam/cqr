@@ -57,10 +57,10 @@ def run_global_cqr_experiment(config: ExperimentConfig) -> pd.DataFrame:
 
     # Generate fixed test set for evaluation
     if config.d == 1:
-        X_test = np.linspace(0, 1, config.n_test).reshape(-1, 1).astype(np.float32)
+        X_test = np.linspace(-1, 1, config.n_test).reshape(-1, 1).astype(np.float32)
     else:
         # For higher d, use random test points
-        X_test = np.random.uniform(0, 1, (config.n_test, config.d)).astype(np.float32)
+        X_test = np.random.uniform(-1, 1, (config.n_test, config.d)).astype(np.float32)
 
     len_oracle = get_oracle_interval_length(X_test, config.alpha, config.beta)
 
