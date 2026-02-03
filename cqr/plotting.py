@@ -134,6 +134,99 @@ def plot_convergence(
     print(f"\nSaved: {output_path}")
 
 
+def plot_convergence_multiple_c(
+    all_results: Dict[float, pd.DataFrame],
+    output_path: str = "convergence_multiple_c.pdf",
+    title: str = "CQR Convergence",
+    theory_slope: float = -1 / 3,
+    d: int = 1,
+    beta: float = 1.0,
+    show: bool = True,
+) -> None:
+    """
+    Create log-log convergence plot showing RMSE vs sample size for multiple c values.
+
+    Args:
+        all_results: Dictionary mapping c values to DataFrames with columns ['N', 'rmse_mean', 'rmse_std']
+        output_path: Path to save the figure
+        title: Plot title
+        theory_slope: Theoretical convergence rate exponent
+        d: Input dimension (for annotation)
+        beta: Hölder smoothness (for annotation)
+        show: Whether to display the plot
+    """
+    setup_plotting()
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    # Colors and markers for different c values
+    colors = ["#d62728", "#ff7f0e", "#2ca02c"]
+    markers = ["o", "s", "^"]
+    
+    # Plot each c value
+    for idx, (c_val, df) in enumerate(sorted(all_results.items(), reverse=True)):
+        color = colors[idx % len(colors)]
+        marker = markers[idx % len(markers)]
+        
+        # Linear regression in log-log space
+        log_N = np.log(df["N"].values)
+        log_err = np.log(df["rmse_mean"].values)
+        slope, intercept, r_value, _, _ = linregress(log_N, log_err)
+
+        print(f"\nc = {c_val} (m = N^{c_val}):")
+        print(f"  Empirical convergence rate: N^{{{slope:.3f}}}")
+        print(f"  (R² = {r_value**2:.4f})")
+
+        # Experiment points with error bars
+        ax.errorbar(
+            df["N"],
+            df["rmse_mean"],
+            yerr=df["rmse_std"],
+            fmt=marker,
+            color=color,
+            ecolor=color,
+            alpha=0.7,
+            capsize=4,
+            markersize=8,
+            label=f"$m = N^{{{c_val}}}$ (slope: ${slope:.2f}$)",
+            zorder=3 + idx,
+        )
+
+        # Empirical fit line
+        fit_y = np.exp(intercept + slope * log_N)
+        ax.plot(
+            df["N"],
+            fit_y,
+            color=color,
+            linewidth=2,
+            linestyle="--",
+            alpha=0.6,
+            zorder=2 + idx,
+        )
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel(r"Sample Size $N$", fontsize=14)
+    ax.set_ylabel(
+        r"Excess Length RMSE $\||\hat{\mathcal{C}}| - |\mathcal{C}^*|\|_{L_2}$",
+        fontsize=14,
+    )
+    ax.set_title(rf"{title} ($\beta={beta:.0f}$, $d={d}$)", fontsize=16)
+    ax.legend(fontsize=12, loc="best")
+    ax.grid(True, which="both", alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    print(f"\nSaved: {output_path}")
+
+
 def plot_density_intervals(
     results: Dict[str, Any],
     output_path: str = "density_intervals.pdf",

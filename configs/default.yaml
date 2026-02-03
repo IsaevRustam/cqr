@@ -16,9 +16,10 @@ train_epochs: 300    # Training epochs
 learning_rate: 0.01  # Adam learning rate
 
 # Sample size grid (for convergence experiments)
-n_grid_start: 100
-n_grid_end: 10000
-n_grid_num: 15
+# Grid is based on training sample size n, calibration m = n^c
+n_train_grid_start: 100
+n_train_grid_end: 10000
+n_train_grid_num: 15
 
 # Fixed sample size (for localized experiments)
 n_fixed: 200000
@@ -26,6 +27,14 @@ n_fixed: 200000
 # Bandwidth scale factor for localized CQR
 # Inflates bandwidth h = scale * m^{-1/(2γ+d)} to ensure neighbors in sparse regions
 bandwidth_scale: 0.8
+
+# Calibration size multiplier for global CQR (m = C * n^c)
+# Ensures sufficient samples for quantile estimation while maintaining asymptotic rate
+calibration_scale_c: 5.0
+
+# Calibration exponent: controls relationship m = C * n^c
+# Default 0.5 gives m = O(sqrt(n))
+calibration_exponent: 0.5
 
 # Test set size
 n_test: 100000
