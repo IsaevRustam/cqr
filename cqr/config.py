@@ -59,6 +59,10 @@ class ExperimentConfig:
 
     # Bandwidth scale factor for localized CQR
     bandwidth_scale: float = 6.0
+    
+    # Calibration size multiplier for global CQR (m = C * n^c)
+    # Ensures sufficient samples for quantile estimation while maintaining rate
+    calibration_scale_c: float = 5.0
 
     # Test set size
     n_test: int = 1000

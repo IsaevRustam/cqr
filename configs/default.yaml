@@ -28,6 +28,10 @@ n_fixed: 200000
 # Inflates bandwidth h = scale * m^{-1/(2γ+d)} to ensure neighbors in sparse regions
 bandwidth_scale: 0.8
 
+# Calibration size multiplier for global CQR (m = C * n^c)
+# Ensures sufficient samples for quantile estimation while maintaining asymptotic rate
+calibration_scale_c: 5.0
+
 # Test set size
 n_test: 100000
 

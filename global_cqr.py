@@ -25,6 +25,7 @@ from cqr import (
     global_calibration,
     setup_plotting,
     plot_convergence,
+    plot_convergence_multiple_c,
 )
 from cqr.models import train_quantile_models
 
@@ -69,13 +70,13 @@ def run_global_cqr_experiment(config: ExperimentConfig, c: float = 0.5) -> pd.Da
     print("Experiment A: Global Split CQR (Theorem 3)")
     print("=" * 60)
     print(f"Configuration: alpha={config.alpha}, beta={config.beta}, d={config.d}")
-    print(f"Calibration size: m = n^{c}, Theory rate: N^{{{config.theory_rate:.3f}}}")
+    print(f"Calibration size: m = {config.calibration_scale_c} * n^{c}, Theory rate: N^{{{config.theory_rate:.3f}}}")
     print(f"Attempts: {config.n_attempts}")
     print("-" * 60)
 
     for n_train in n_train_grid:
-        # Calibration set size: m = n_train^c
-        m = int(n_train ** c)
+        # Calibration set size: m = C * n_train^c
+        m = int(config.calibration_scale_c * (n_train ** c))
         N = n_train + m
 
         batch_errors = []
