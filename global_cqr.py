@@ -177,7 +177,10 @@ def main():
     print(f"{'='*60}")
     print(f"\nTo generate plots, use:")
     print(f"  python plot_combined_results.py {csv_filename}")
-    print(f"Or combine multiple CSVs:")
+    print(f"\nThis will create two plots:")
+    print(f"  - convergence_d{config.d}_vs_n.pdf (vs training size n)")
+    print(f"  - convergence_d{config.d}_vs_m.pdf (vs calibration size m)")
+    print(f"\nOr combine multiple CSVs:")
     print(f"  python plot_combined_results.py results_*.csv")
 
 
