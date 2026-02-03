@@ -2,9 +2,9 @@
 Experiment configuration with YAML support.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 import yaml
 
 
@@ -28,6 +28,10 @@ class ExperimentConfig:
         n_grid_num: Number of points in n_grid
         n_test: Number of test points for evaluation
         output_dir: Directory for output files
+        dist_params: Distribution-specific parameters dict with keys:
+            - truncated_normal: {loc, scale}
+            - beta: {a, b}
+            - mixture: {centers, scales, weights}
     """
 
     # Core experiment parameters
@@ -52,11 +56,25 @@ class ExperimentConfig:
     # Fixed sample size (for localized experiments)
     n_fixed: int = 20000
 
+    # Bandwidth scale factor for localized CQR
+    bandwidth_scale: float = 6.0
+
     # Test set size
     n_test: int = 1000
 
     # Output
     output_dir: str = "."
+    
+    # Distribution parameters (configurable per distribution)
+    dist_params: Dict[str, Any] = field(default_factory=lambda: {
+        "truncated_normal": {"loc": 0.0, "scale": 0.5},
+        "beta": {"a": 2.0, "b": 5.0},
+        "mixture": {
+            "centers": (-0.6, 0.6),
+            "scales": (0.15, 0.15),
+            "weights": (0.5, 0.5)
+        }
+    })
 
     @property
     def tau_low(self) -> float:

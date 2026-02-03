@@ -170,18 +170,24 @@ class LocalConformalOptimizer:
         return corrections
 
 
-def compute_bandwidth(m: int, d: int, gamma: float = 1.0) -> float:
+def compute_bandwidth(m: int, d: int, gamma: float = 1.0, scale: float = 1.0) -> float:
     """
     Compute optimal bandwidth for localized CQR.
 
-    h ~ m^{-1/(2γ+d)}, where γ is Hölder constant of density.
+    h = scale * m^{-1/(2γ+d)}, where γ is Hölder constant of density.
+
+    The asymptotic theory dictates the rate w.r.t. n, but the constant
+    pre-factor (scale) can be tuned for finite samples. For sparse
+    distributions (e.g., Beta(2,5)), a larger scale (~6.0) ensures
+    the kernel finds neighbors in low-density regions.
 
     Args:
         m: Calibration set size
         d: Input dimension
         gamma: Hölder smoothness of density (assume 1.0)
+        scale: Multiplicative constant for bandwidth (default 1.0)
 
     Returns:
         Bandwidth h
     """
-    return m ** (-1.0 / (2 * gamma + d))
+    return scale * (m ** (-1.0 / (2 * gamma + d)))
