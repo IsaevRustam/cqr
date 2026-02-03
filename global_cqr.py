@@ -29,7 +29,7 @@ from cqr import (
 from cqr.models import train_quantile_models
 
 
-def run_global_cqr_experiment(config: ExperimentConfig) -> pd.DataFrame:
+def run_global_cqr_experiment(config: ExperimentConfig, c: float = 0.5) -> pd.DataFrame:
     """
     Run Global Split CQR experiment to demonstrate convergence rate (Theorem 3).
 
@@ -40,6 +40,7 @@ def run_global_cqr_experiment(config: ExperimentConfig) -> pd.DataFrame:
 
     Args:
         config: Experiment configuration
+        c: Calibration set size exponent (m = N^c)
 
     Returns:
         DataFrame with columns ['N', 'rmse_mean', 'rmse_std']
@@ -72,9 +73,9 @@ def run_global_cqr_experiment(config: ExperimentConfig) -> pd.DataFrame:
     print("-" * 60)
 
     for N in n_grid:
-        # Split: train and calibration
-        n_train = N // 2
-        m = N - n_train
+        # Split: train and calibration (m = N^c)
+        m = int(N ** c)
+        n_train = N - m
 
         batch_errors = []
 
@@ -166,13 +167,21 @@ def main():
     else:
         output_path = f"experiment_theorem_3_d{config.d}.pdf"
 
-    # Run experiment
-    df_results = run_global_cqr_experiment(config)
+    # Run experiments for different c values (m = N^c)
+    c_values = [1.0, 0.66, 0.33]
+    all_results = {}
+    
+    for c in c_values:
+        print(f"\n{'='*60}")
+        print(f"Running experiment with c = {c} (m = N^{c})")
+        print(f"{'='*60}")
+        df_results = run_global_cqr_experiment(config, c=c)
+        all_results[c] = df_results
 
-    # Plot convergence
+    # Plot convergence for all c values
     setup_plotting()
-    plot_convergence(
-        df_results,
+    plot_convergence_multiple_c(
+        all_results,
         output_path=output_path,
         title="Global Split CQR Convergence",
         theory_slope=config.theory_rate,
