@@ -22,10 +22,10 @@ class ExperimentConfig:
         hidden_dim: Hidden layer dimension for QuantileNN
         train_epochs: Number of training epochs
         learning_rate: Learning rate for Adam optimizer
-        n_grid: Sample sizes for convergence experiment (geomspace)
-        n_grid_start: Start of geomspace for n_grid
-        n_grid_end: End of geomspace for n_grid
-        n_grid_num: Number of points in n_grid
+        n_train_grid: Training sample sizes for convergence experiment (geomspace)
+        n_train_grid_start: Start of geomspace for n_train_grid
+        n_train_grid_end: End of geomspace for n_train_grid
+        n_train_grid_num: Number of points in n_train_grid
         n_test: Number of test points for evaluation
         output_dir: Directory for output files
         dist_params: Distribution-specific parameters dict with keys:
@@ -49,9 +49,10 @@ class ExperimentConfig:
     learning_rate: float = 0.01
 
     # Sample size grid (for convergence experiments)
-    n_grid_start: int = 100
-    n_grid_end: int = 10000
-    n_grid_num: int = 15
+    # Now based on training sample size n, calibration m = n^c
+    n_train_grid_start: int = 100
+    n_train_grid_end: int = 10000
+    n_train_grid_num: int = 15
 
     # Fixed sample size (for localized experiments)
     n_fixed: int = 20000

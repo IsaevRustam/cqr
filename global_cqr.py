@@ -49,9 +49,9 @@ def run_global_cqr_experiment(config: ExperimentConfig, c: float = 0.5) -> pd.Da
     np.random.seed(config.seed)
     torch.manual_seed(config.seed)
 
-    # Sample size grid
-    n_grid = np.geomspace(
-        config.n_grid_start, config.n_grid_end, num=config.n_grid_num, dtype=int
+    # Training sample size grid
+    n_train_grid = np.geomspace(
+        config.n_train_grid_start, config.n_train_grid_end, num=config.n_train_grid_num, dtype=int
     )
 
     results = []
@@ -69,13 +69,14 @@ def run_global_cqr_experiment(config: ExperimentConfig, c: float = 0.5) -> pd.Da
     print("Experiment A: Global Split CQR (Theorem 3)")
     print("=" * 60)
     print(f"Configuration: alpha={config.alpha}, beta={config.beta}, d={config.d}")
-    print(f"Attempts: {config.n_attempts}, Theory rate: N^{{{config.theory_rate:.3f}}}")
+    print(f"Calibration size: m = n^{c}, Theory rate: N^{{{config.theory_rate:.3f}}}")
+    print(f"Attempts: {config.n_attempts}")
     print("-" * 60)
 
-    for N in n_grid:
-        # Split: train and calibration (m = N^c)
-        m = int(N ** c)
-        n_train = N - m
+    for n_train in n_train_grid:
+        # Calibration set size: m = n_train^c
+        m = int(n_train ** c)
+        N = n_train + m
 
         batch_errors = []
 
@@ -130,12 +131,14 @@ def run_global_cqr_experiment(config: ExperimentConfig, c: float = 0.5) -> pd.Da
         results.append(
             {
                 "N": N,
+                "n_train": n_train,
+                "m": m,
                 "rmse_mean": np.mean(batch_errors),
                 "rmse_std": np.std(batch_errors),
             }
         )
         print(
-            f"N={N:5d}: RMSE = {np.mean(batch_errors):.4f} ± {np.std(batch_errors):.4f}"
+            f"n={n_train:5d}, m={m:5d}, N={N:5d}: RMSE = {np.mean(batch_errors):.4f} ± {np.std(batch_errors):.4f}"
         )
 
     print("-" * 60)

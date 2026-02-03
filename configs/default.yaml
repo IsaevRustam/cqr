@@ -16,9 +16,10 @@ train_epochs: 300    # Training epochs
 learning_rate: 0.01  # Adam learning rate
 
 # Sample size grid (for convergence experiments)
-n_grid_start: 100
-n_grid_end: 10000
-n_grid_num: 15
+# Grid is based on training sample size n, calibration m = n^c
+n_train_grid_start: 100
+n_train_grid_end: 10000
+n_train_grid_num: 15
 
 # Fixed sample size (for localized experiments)
 n_fixed: 200000
