@@ -2,9 +2,9 @@
 Combined Results Plotter for Global CQR Experiments
 ====================================================
 Loads multiple CSV result files from separate experiment runs and creates
-two separate convergence plots (like in the reference paper):
-1. Length deviation vs Training size (n)
-2. Length deviation vs Calibration size (m)
+a single figure with two side-by-side plots (like in the reference paper):
+- Left: Length deviation vs Training size (n)
+- Right: Length deviation vs Calibration size (m)
 
 Usage:
     # Plot results from multiple c values
@@ -15,10 +15,10 @@ Usage:
     # Use glob pattern
     python plot_combined_results.py results_*.csv
     
-    # Specify custom output prefix
-    python plot_combined_results.py results_*.csv --output my_experiment
+    # Specify custom output file
+    python plot_combined_results.py results_*.csv --output my_experiment.pdf
     
-    This will create: my_experiment_vs_n.pdf and my_experiment_vs_m.pdf
+    This creates a single PDF with two plots side-by-side.
 """
 
 import argparse
@@ -128,111 +128,120 @@ def load_and_group_results(csv_paths: List[str]) -> Dict[float, pd.DataFrame]:
     return results_by_c
 
 
-def plot_convergence_vs_variable(
+def plot_dual_convergence(
     all_results: Dict[float, pd.DataFrame],
-    variable: str,
     output_path: str,
-    title: str,
     d: int = 1,
     beta: float = 1.0,
 ) -> None:
     """
-    Create convergence plot showing RMSE vs a single variable (n or m).
+    Create a single figure with two side-by-side plots (like in the reference paper):
+    - Left: Convergence vs training size (n)
+    - Right: Convergence vs calibration size (m)
     
     Args:
         all_results: Dictionary mapping c values to DataFrames
-        variable: Either 'n_train' or 'm'
         output_path: Path to save the figure
-        title: Plot title
         d: Input dimension
         beta: Hölder smoothness
     """
     setup_plotting()
     
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # Create figure with two square subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
     # Colors for different c values
     colors = ["#d62728", "#ff7f0e", "#2ca02c"]
     markers = ["o", "s", "^"]
     
-    # Plot each c value
-    for idx, (c_val, df) in enumerate(sorted(all_results.items(), reverse=True)):
-        color = colors[idx % len(colors)]
-        marker = markers[idx % len(markers)]
+    # Plot both graphs
+    for variable, ax, title_suffix in [
+        ("n_train", ax1, "vs Training Size $(n)$"),
+        ("m", ax2, "vs Calibration Size $(m)$")
+    ]:
+        # Plot each c value
+        for idx, (c_val, df) in enumerate(sorted(all_results.items(), reverse=True)):
+            color = colors[idx % len(colors)]
+            marker = markers[idx % len(markers)]
+            
+            x_data = df[variable].values
+            y_data = df["rmse_mean"].values
+            yerr = df["rmse_std"].values
+            
+            # Linear regression in log-log space
+            log_x = np.log(x_data)
+            log_y = np.log(y_data)
+            slope, intercept, r_value, _, _ = linregress(log_x, log_y)
+            
+            var_label = "n" if variable == "n_train" else "m"
+            if variable == "n_train":
+                print(f"\nc = {c_val}:")
+                print(f"  Slope vs {var_label}: {slope:.3f} (R² = {r_value**2:.4f})", end="")
+            else:
+                print(f", vs {var_label}: {slope:.3f} (R² = {r_value**2:.4f})")
+            
+            # Plot points with error bars
+            ax.errorbar(
+                x_data,
+                y_data,
+                yerr=yerr,
+                fmt=marker,
+                color=color,
+                ecolor=color,
+                alpha=0.7,
+                capsize=4,
+                markersize=6,
+                label=f"$c = {c_val}$ (slope: ${slope:.2f}$)",
+                zorder=3 + idx,
+            )
+            
+            # Fit line
+            fit_y = np.exp(intercept + slope * log_x)
+            ax.plot(
+                x_data,
+                fit_y,
+                color=color,
+                linewidth=2,
+                linestyle="--",
+                alpha=0.5,
+                zorder=2 + idx,
+            )
         
-        x_data = df[variable].values
-        y_data = df["rmse_mean"].values
-        yerr = df["rmse_std"].values
+        # Configure axes
+        ax.set_xscale("log")
+        ax.set_yscale("log")
         
-        # Linear regression in log-log space
-        log_x = np.log(x_data)
-        log_y = np.log(y_data)
-        slope, intercept, r_value, _, _ = linregress(log_x, log_y)
-        
-        var_label = "n" if variable == "n_train" else "m"
-        print(f"\nc = {c_val} (m = N^{c_val}):")
-        print(f"  Empirical slope vs {var_label}: {slope:.3f}")
-        print(f"  (R² = {r_value**2:.4f})")
-        
-        # Plot points with error bars
-        ax.errorbar(
-            x_data,
-            y_data,
-            yerr=yerr,
-            fmt=marker,
-            color=color,
-            ecolor=color,
-            alpha=0.7,
-            capsize=4,
-            markersize=7,
-            label=f"$c = {c_val}$ (slope: ${slope:.2f}$)",
-            zorder=3 + idx,
+        xlabel = "# Training $(n)$" if variable == "n_train" else "# Calibration $(m)$"
+        ax.set_xlabel(xlabel, fontsize=13)
+        ax.set_ylabel(
+            r"Excess Length RMSE",
+            fontsize=13,
         )
-        
-        # Fit line
-        fit_y = np.exp(intercept + slope * log_x)
-        ax.plot(
-            x_data,
-            fit_y,
-            color=color,
-            linewidth=2,
-            linestyle="--",
-            alpha=0.5,
-            zorder=2 + idx,
-        )
+        ax.set_title(title_suffix, fontsize=14)
+        ax.legend(fontsize=10, loc="best")
+        ax.grid(True, which="both", alpha=0.3)
     
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    
-    xlabel = "# Training $(n)$" if variable == "n_train" else "# Calibration $(m)$"
-    ax.set_xlabel(xlabel, fontsize=14)
-    ax.set_ylabel(
-        r"Excess Length RMSE $\|\hat{\mathcal{C}}| - |\mathcal{C}^*|\|_{L_2}$",
-        fontsize=14,
-    )
-    ax.set_title(rf"{title} ($\beta={beta:.0f}$, $d={d}$)", fontsize=16)
-    ax.legend(fontsize=11, loc="best")
-    ax.grid(True, which="both", alpha=0.3)
+    # Add overall title
+    fig.suptitle(rf"Global CQR Convergence ($\beta={beta:.0f}$, $d={d}$)", 
+                 fontsize=16, y=0.98)
     
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", dpi=300)
     plt.close()
     
-    print(f"\nSaved: {output_path}")
+    print(f"\nSaved combined plot: {output_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Create two convergence plots: vs n and vs m",
+        description="Create combined convergence plot with two subplots (vs n and vs m)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python plot_combined_results.py results_*.csv
-  python plot_combined_results.py results_*.csv --output my_experiment
+  python plot_combined_results.py results_*.csv --output my_experiment.pdf
   
-This creates two plots:
-  - {output}_vs_n.pdf (convergence vs training size)
-  - {output}_vs_m.pdf (convergence vs calibration size)
+This creates a single PDF with two side-by-side plots.
         """
     )
     parser.add_argument(
@@ -244,7 +253,7 @@ This creates two plots:
         "--output",
         type=str,
         default=None,
-        help="Output file prefix (default: convergence_d{d})"
+        help="Output PDF path (default: convergence_d{d}.pdf)"
     )
     parser.add_argument(
         "--beta",
@@ -268,43 +277,26 @@ This creates two plots:
     except:
         d = 1
     
-    # Determine output prefix
+    # Determine output path
     if args.output:
-        output_prefix = args.output
+        output_path = args.output
     else:
-        output_prefix = f"convergence_d{d}"
+        output_path = f"convergence_d{d}.pdf"
     
-    # Generate two plots
+    # Generate combined plot
     print(f"\n{'='*60}")
-    print("Generating plots...")
+    print("Generating combined plot...")
     print(f"{'='*60}")
     
-    # Plot 1: vs n (training size)
-    output_vs_n = f"{output_prefix}_vs_n.pdf"
-    plot_convergence_vs_variable(
+    plot_dual_convergence(
         all_results,
-        variable="n_train",
-        output_path=output_vs_n,
-        title="Convergence vs Training Size",
-        d=d,
-        beta=args.beta,
-    )
-    
-    # Plot 2: vs m (calibration size)
-    output_vs_m = f"{output_prefix}_vs_m.pdf"
-    plot_convergence_vs_variable(
-        all_results,
-        variable="m",
-        output_path=output_vs_m,
-        title="Convergence vs Calibration Size",
+        output_path=output_path,
         d=d,
         beta=args.beta,
     )
     
     print(f"\n{'='*60}")
-    print(f"Successfully created two plots:")
-    print(f"  1. {output_vs_n}")
-    print(f"  2. {output_vs_m}")
+    print(f"Successfully created combined plot: {output_path}")
     print(f"{'='*60}")
     
     return 0

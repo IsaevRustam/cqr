@@ -11,8 +11,8 @@ seed: 42             # Random seed for reproducibility
 n_attempts: 50       # Number of Monte Carlo repetitions
 
 # Neural network settings
-hidden_dim: 64       # Hidden layer width
-train_epochs: 300    # Training epochs
+hidden_dim: 32       # Hidden layer width
+train_epochs: 200    # Training epochs
 learning_rate: 0.01  # Adam learning rate
 
 # Sample size grid (for convergence experiments)
@@ -30,11 +30,11 @@ bandwidth_scale: 0.8
 
 # Calibration size multiplier for global CQR (m = C * n^c)
 # Ensures sufficient samples for quantile estimation while maintaining asymptotic rate
-calibration_scale_c: 5.0
+calibration_scale_c: 1.0
 
 # Calibration exponent: controls relationship m = C * n^c
 # Default 0.5 gives m = O(sqrt(n))
-calibration_exponent: 0.5
+calibration_exponent: 1.0
 
 # Test set size
 n_test: 100000

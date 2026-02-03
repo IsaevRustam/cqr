@@ -152,7 +152,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default=None,
+        default="configs/default.yaml",
         help="Path to YAML config file (default: use built-in defaults)",
     )
     args = parser.parse_args()
@@ -175,13 +175,11 @@ def main():
     print(f"\n{'='*60}")
     print(f"Results saved to: {csv_path}")
     print(f"{'='*60}")
-    print(f"\nTo generate plots, use:")
+    print(f"\nTo generate combined plot (two subplots side-by-side):")
     print(f"  python plot_combined_results.py {csv_filename}")
-    print(f"\nThis will create two plots:")
-    print(f"  - convergence_d{config.d}_vs_n.pdf (vs training size n)")
-    print(f"  - convergence_d{config.d}_vs_m.pdf (vs calibration size m)")
     print(f"\nOr combine multiple CSVs:")
     print(f"  python plot_combined_results.py results_*.csv")
+    print(f"\nThis creates: convergence_d{config.d}.pdf")
 
 
 if __name__ == "__main__":
