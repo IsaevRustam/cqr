@@ -42,7 +42,7 @@ def plot_convergence(
     Create log-log convergence plot showing RMSE vs sample size.
 
     Args:
-        df: DataFrame with columns ['N', 'rmse_mean', 'rmse_std']
+        df: DataFrame with columns ['n_train', 'rmse_mean', 'rmse_std']
         output_path: Path to save the figure
         title: Plot title
         theory_slope: Theoretical convergence rate exponent
@@ -53,11 +53,11 @@ def plot_convergence(
     setup_plotting()
 
     # Linear regression in log-log space
-    log_N = np.log(df["N"].values)
+    log_n = np.log(df["n_train"].values)
     log_err = np.log(df["rmse_mean"].values)
-    slope, intercept, r_value, _, _ = linregress(log_N, log_err)
+    slope, intercept, r_value, _, _ = linregress(log_n, log_err)
 
-    print(f"\nEmpirical convergence rate: N^{{{slope:.3f}}}")
+    print(f"\nEmpirical convergence rate: n^{{{slope:.3f}}}")
     print(f"(R² = {r_value**2:.4f})")
 
     # Create figure
@@ -65,7 +65,7 @@ def plot_convergence(
 
     # Experiment points with error bars
     ax.errorbar(
-        df["N"],
+        df["n_train"],
         df["rmse_mean"],
         yerr=df["rmse_std"],
         fmt="o",
@@ -77,33 +77,33 @@ def plot_convergence(
     )
 
     # Empirical fit line
-    fit_y = np.exp(intercept + slope * log_N)
+    fit_y = np.exp(intercept + slope * log_n)
     ax.plot(
-        df["N"],
+        df["n_train"],
         fit_y,
         color="#d62728",
         linewidth=2,
-        label=rf"Empirical: $N^{{{slope:.2f}}}$",
+        label=rf"Empirical: $n^{{{slope:.2f}}}$",
         zorder=2,
     )
 
     # Theoretical rate line
     idx_mid = len(df) // 2
-    C_theory = df["rmse_mean"].iloc[idx_mid] / (df["N"].iloc[idx_mid] ** theory_slope)
-    theory_y = C_theory * 1.2 * (df["N"].values ** theory_slope)
+    C_theory = df["rmse_mean"].iloc[idx_mid] / (df["n_train"].iloc[idx_mid] ** theory_slope)
+    theory_y = C_theory * 1.2 * (df["n_train"].values ** theory_slope)
 
     # Format theory slope as fraction
     if abs(theory_slope + 1 / 3) < 0.01:
-        theory_label = r"Theory: $N^{-1/3}$"
+        theory_label = r"Theory: $n^{-1/3}$"
     elif abs(theory_slope + 1 / 4) < 0.01:
-        theory_label = r"Theory: $N^{-1/4}$"
+        theory_label = r"Theory: $n^{-1/4}$"
     elif abs(theory_slope + 1 / 6) < 0.01:
-        theory_label = r"Theory: $N^{-1/6}$"
+        theory_label = r"Theory: $n^{-1/6}$"
     else:
-        theory_label = rf"Theory: $N^{{{theory_slope:.2f}}}$"
+        theory_label = rf"Theory: $n^{{{theory_slope:.2f}}}$"
 
     ax.plot(
-        df["N"],
+        df["n_train"],
         theory_y,
         color="#1f77b4",
         linestyle="--",
@@ -114,12 +114,12 @@ def plot_convergence(
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel(r"Sample Size $N$", fontsize=14)
+    ax.set_xlabel(r"Training Sample Size $n$", fontsize=14)
     ax.set_ylabel(
         r"Excess Length RMSE $\||\hat{\mathcal{C}}| - |\mathcal{C}^*|\|_{L_2}$",
         fontsize=14,
     )
-    ax.set_title(rf"{title} ($\beta={beta:.0f}$, $d={d}$)", fontsize=16)
+    ax.set_title(rf"{title} ($\beta={beta:.0f}$, $d={d}$, $m=n$)", fontsize=16)
     ax.legend(fontsize=12)
     ax.grid(True, which="both", alpha=0.3)
 

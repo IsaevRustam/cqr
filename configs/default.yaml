@@ -15,10 +15,10 @@ hidden_dim: 64       # Hidden layer width
 train_epochs: 300    # Training epochs
 learning_rate: 0.01  # Adam learning rate
 
-# Sample size grid (for convergence experiments)
-n_grid_start: 100
-n_grid_end: 10000
-n_grid_num: 15
+# Sample size grid for training sizes n (calibration size m = n)
+n_grid_start: 100    # Minimum training sample size
+n_grid_end: 10000    # Maximum training sample size
+n_grid_num: 15       # Number of points in geometric progression
 
 # Fixed sample size (for localized experiments)
 n_fixed: 200000

@@ -42,14 +42,14 @@ def run_global_cqr_experiment(config: ExperimentConfig) -> pd.DataFrame:
         config: Experiment configuration
 
     Returns:
-        DataFrame with columns ['N', 'rmse_mean', 'rmse_std']
+        DataFrame with columns ['n_train', 'rmse_mean', 'rmse_std']
     """
     # Set seeds
     np.random.seed(config.seed)
     torch.manual_seed(config.seed)
 
-    # Sample size grid
-    n_grid = np.geomspace(
+    # Sample size grid for TRAINING sizes n
+    n_train_grid = np.geomspace(
         config.n_grid_start, config.n_grid_end, num=config.n_grid_num, dtype=int
     )
 
@@ -68,20 +68,19 @@ def run_global_cqr_experiment(config: ExperimentConfig) -> pd.DataFrame:
     print("Experiment A: Global Split CQR (Theorem 3)")
     print("=" * 60)
     print(f"Configuration: alpha={config.alpha}, beta={config.beta}, d={config.d}")
-    print(f"Attempts: {config.n_attempts}, Theory rate: N^{{{config.theory_rate:.3f}}}")
+    print(f"Attempts: {config.n_attempts}, Theory rate: n^{{{config.theory_rate:.3f}}}")
     print("-" * 60)
 
-    for N in n_grid:
-        # Split: train and calibration
-        n_train = N // 2
-        m = N - n_train
+    for n in n_train_grid:
+        # Calibration size m = n (50/50 split, but n is the driver)
+        m = n
 
         batch_errors = []
 
         for attempt in range(config.n_attempts):
             # Generate fresh data for each attempt
             X_train, Y_train = generate_uniform_data(
-                n_train, d=config.d, beta=config.beta
+                n, d=config.d, beta=config.beta
             )
             X_cal, Y_cal = generate_uniform_data(m, d=config.d, beta=config.beta)
 
@@ -128,13 +127,13 @@ def run_global_cqr_experiment(config: ExperimentConfig) -> pd.DataFrame:
 
         results.append(
             {
-                "N": N,
+                "n_train": n,
                 "rmse_mean": np.mean(batch_errors),
                 "rmse_std": np.std(batch_errors),
             }
         )
         print(
-            f"N={N:5d}: RMSE = {np.mean(batch_errors):.4f} ± {np.std(batch_errors):.4f}"
+            f"n={n:5d}: RMSE = {np.mean(batch_errors):.4f} ± {np.std(batch_errors):.4f}"
         )
 
     print("-" * 60)

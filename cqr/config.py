@@ -23,8 +23,8 @@ class ExperimentConfig:
         train_epochs: Number of training epochs
         learning_rate: Learning rate for Adam optimizer
         n_grid: Sample sizes for convergence experiment (geomspace)
-        n_grid_start: Start of geomspace for n_grid
-        n_grid_end: End of geomspace for n_grid
+        n_grid_start: Start of geomspace for n_grid (training sample size)
+        n_grid_end: End of geomspace for n_grid (training sample size)
         n_grid_num: Number of points in n_grid
         n_test: Number of test points for evaluation
         output_dir: Directory for output files
