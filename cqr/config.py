@@ -63,6 +63,10 @@ class ExperimentConfig:
     # Calibration size multiplier for global CQR (m = C * n^c)
     # Ensures sufficient samples for quantile estimation while maintaining rate
     calibration_scale_c: float = 5.0
+    
+    # Calibration exponent: controls relationship m = C * n^c
+    # Default 0.5 gives m = O(sqrt(n))
+    calibration_exponent: float = 0.5
 
     # Test set size
     n_test: int = 1000

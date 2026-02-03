@@ -6,12 +6,16 @@ with a single global calibration constant Q̂.
 
 Reference: Theorem 3 from the article on non-asymptotic guarantees for CQR.
 
+This script runs a single experiment and saves results to CSV.
+Use plot_combined_results.py to combine and visualize multiple runs.
+
 Usage:
-    python experiment_global_cqr.py                    # default config (d=1)
-    python experiment_global_cqr.py --config configs/d2.yaml  # d=2
+    python global_cqr.py                               # default config (d=1, c=0.5)
+    python global_cqr.py --config configs/d2.yaml      # d=2
 """
 # %%
 import argparse
+import os
 import numpy as np
 import torch
 import pandas as pd
@@ -23,9 +27,6 @@ from cqr import (
     get_oracle_interval_length,
     compute_conformity_scores,
     global_calibration,
-    setup_plotting,
-    plot_convergence,
-    plot_convergence_multiple_c,
 )
 from cqr.models import train_quantile_models
 
@@ -154,44 +155,30 @@ def main():
         default=None,
         help="Path to YAML config file (default: use built-in defaults)",
     )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Output PDF path (default: experiment_theorem_3_d{d}.pdf)",
-    )
     args = parser.parse_args()
 
     # Load config
     config = load_config(args.config)
 
-    # Determine output path
-    if args.output:
-        output_path = args.output
-    else:
-        output_path = f"experiment_theorem_3_d{config.d}.pdf"
+    # Run single experiment with calibration exponent from config
+    c = config.calibration_exponent
+    print(f"\n{'='*60}")
+    print(f"Running experiment with c = {c} (m = {config.calibration_scale_c} * n^{c})")
+    print(f"{'='*60}")
+    df_results = run_global_cqr_experiment(config, c=c)
 
-    # Run experiments for different c values (m = N^c)
-    c_values = [1.0, 0.66, 0.33]
-    all_results = {}
+    # Save results to CSV
+    csv_filename = f"results_global_cqr_d{config.d}_c{c}_seed{config.seed}.csv"
+    csv_path = os.path.join(config.output_dir, csv_filename)
+    df_results.to_csv(csv_path, index=False)
     
-    for c in c_values:
-        print(f"\n{'='*60}")
-        print(f"Running experiment with c = {c} (m = N^{c})")
-        print(f"{'='*60}")
-        df_results = run_global_cqr_experiment(config, c=c)
-        all_results[c] = df_results
-
-    # Plot convergence for all c values
-    setup_plotting()
-    plot_convergence_multiple_c(
-        all_results,
-        output_path=output_path,
-        title="Global Split CQR Convergence",
-        theory_slope=config.theory_rate,
-        d=config.d,
-        beta=config.beta,
-    )
+    print(f"\n{'='*60}")
+    print(f"Results saved to: {csv_path}")
+    print(f"{'='*60}")
+    print(f"\nTo generate plots, use:")
+    print(f"  python plot_combined_results.py {csv_filename}")
+    print(f"Or combine multiple CSVs:")
+    print(f"  python plot_combined_results.py results_*.csv")
 
 
 if __name__ == "__main__":

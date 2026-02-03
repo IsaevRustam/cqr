@@ -32,6 +32,10 @@ bandwidth_scale: 0.8
 # Ensures sufficient samples for quantile estimation while maintaining asymptotic rate
 calibration_scale_c: 5.0
 
+# Calibration exponent: controls relationship m = C * n^c
+# Default 0.5 gives m = O(sqrt(n))
+calibration_exponent: 0.5
+
 # Test set size
 n_test: 100000
 
