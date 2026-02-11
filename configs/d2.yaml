@@ -23,6 +23,9 @@ n_grid_num: 12
 # Fixed sample size (for localized experiments)
 n_fixed: 50000
 
+# Calibration exponent: controls relationship m = C * n^c
+calibration_exponent: 0.5
+
 # Test set size
 n_test: 2000
 

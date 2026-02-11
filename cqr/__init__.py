@@ -28,7 +28,7 @@ from .calibration import (
     global_calibration,
     LocalConformalOptimizer,
 )
-from .plotting import setup_plotting, plot_convergence, plot_density_intervals, plot_heatmap_d2
+from .plotting import setup_plotting, plot_convergence, plot_convergence_multiple_c, plot_density_intervals, plot_heatmap_d2
 
 __all__ = [
     # Config
@@ -59,6 +59,7 @@ __all__ = [
     # Plotting
     "setup_plotting",
     "plot_convergence",
+    "plot_convergence_multiple_c",
     "plot_density_intervals",
     "plot_heatmap_d2",
 ]
