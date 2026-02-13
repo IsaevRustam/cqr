@@ -128,12 +128,17 @@ class LocalConformalOptimizer:
         weights = weights / weights_sum
 
         corrections = np.zeros(len(X_test))
-        target_quantile = 1 - alpha
+        # Use the same finite-sample correction as global CQR:
+        # β_m = ceil((m+1)(1-α)) / m, which is slightly above (1-α)
+        m = len(self.scores)
+        beta_m = np.ceil((m + 1) * (1 - alpha)) / m
+        beta_m = min(beta_m, 1.0)
+        target_quantile = beta_m
 
-        # Global quantile as fallback
+        # Global quantile as fallback (with finite-sample correction)
         if fallback_to_global:
             if self._global_fallback is None:
-                self._global_fallback = np.quantile(self.scores, target_quantile)
+                self._global_fallback = float(np.quantile(self.scores, beta_m))
             global_q = self._global_fallback
         else:
             global_q = np.max(self.scores)  # Conservative fallback
