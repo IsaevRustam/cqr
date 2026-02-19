@@ -10,7 +10,8 @@ publication-quality figure comparing:
 
 Scenarios
 ---------
-1. **Step-Variance (1D)** — σ(x) has abrupt jumps across three regimes.
+1. **Smooth Quadratic Heteroscedasticity (1D)** — σ(x) grows quadratically
+   from a quiet center to loud edges, combined with non-uniform data density.
 2. **Banana / Crescent (2D)** — data lives on a curved parabolic manifold
    with position-dependent noise.
 3. **Mixture Clusters (1D)** — three Gaussian clusters, each with a
@@ -57,37 +58,41 @@ def _oracle_bounds(mu, sigma, alpha):
     return (mu - z * sigma), (mu + z * sigma)
 
 
-# ---- Experiment 1: Step-Variance (1D) --------------------------------------
+# ---- Experiment 1: Smooth Quadratic Heteroscedasticity (1D) ----------------
 
-def generate_step_variance(n, seed=None):
+def generate_smooth_hetero(n, seed=None):
     """
-    X ~ Uniform[-1, 1],  Y = mu(x) + sigma(x) * eps,  eps ~ N(0,1).
+    X ~ TruncatedNormal(0, 0.35) on [-1, 1]  (more data near center)
+    Y = mu(x) + sigma(x) * eps,  eps ~ N(0,1).
 
     mu(x)    = 2 sin(3x)
-    sigma(x) = { 0.3   if |x| < 0.35
-               { 2.0   if 0.35 <= |x| < 0.7
-               { 0.5   if |x| >= 0.7
+    sigma(x) = 0.2 + 3.0 * x^2   (smooth quadratic growth)
+
+    Variance is minimal (0.2) at center and maximal (3.2) at edges —
+    a natural 16:1 ratio. Combined with non-uniform X density that
+    concentrates data at the center, global CQR is biased toward the
+    high-density low-noise region and over-corrects in the center
+    while under-correcting at the edges.
     """
     rng = np.random.RandomState(seed)
-    X = rng.uniform(-1, 1, size=(n, 1)).astype(np.float32)
-    mu, sigma = _step_variance_truth(X)
+    # Non-uniform X — truncated normal concentrates data at center
+    X = rng.normal(0, 0.35, size=(n, 1)).clip(-1, 1).astype(np.float32)
+    mu, sigma = _smooth_hetero_truth(X)
     eps = rng.randn(n, 1).astype(np.float32)
     Y = (mu + sigma * eps).astype(np.float32)
     return X, Y
 
 
-def _step_variance_truth(X):
+def _smooth_hetero_truth(X):
     """Return (mu, sigma) each shape (n, 1)."""
     x = X.reshape(-1, 1).astype(np.float64)
-    ax = np.abs(x)
     mu = 2.0 * np.sin(3.0 * x)
-    sigma = np.where(ax < 0.35, 0.3,
-                     np.where(ax < 0.7, 2.0, 0.5))
+    sigma = 0.2 + 3.0 * (x ** 2)
     return mu.astype(np.float32), sigma.astype(np.float32)
 
 
-def oracle_step_variance(X, alpha):
-    mu, sigma = _step_variance_truth(X)
+def oracle_smooth_hetero(X, alpha):
+    mu, sigma = _smooth_hetero_truth(X)
     return _oracle_bounds(mu.ravel(), sigma.ravel(), alpha)
 
 
@@ -99,7 +104,7 @@ def generate_banana(n, seed=None):
     X2 | X1 ~ N(X1^2 - 0.5, 0.15),  clipped to [-1, 1]
 
     mu(x) = 2 sin(3 x1) + x2
-    sigma(x) = 0.3 + 1.5 |x1|
+    sigma(x) = 0.2 + 2.5 |x1|
     """
     rng = np.random.RandomState(seed)
     x1 = rng.uniform(-1, 1, size=n).astype(np.float64)
@@ -118,7 +123,7 @@ def _banana_truth(X):
     x1 = X[:, 0:1]
     x2 = X[:, 1:2]
     mu = 2.0 * np.sin(3.0 * x1) + x2
-    sigma = 0.3 + 1.5 * np.abs(x1)
+    sigma = 0.2 + 2.5 * np.abs(x1)
     return mu.astype(np.float32), sigma.astype(np.float32)
 
 
@@ -153,7 +158,10 @@ def generate_clusters(n, seed=None):
 
     mu(x)    = 3 x
     sigma(x) = soft-assignment weighted blend of per-cluster noise:
-               sigma_left=1.8, sigma_center=0.2, sigma_right=0.8
+               sigma_left=4.0, sigma_center=0.15, sigma_right=0.8
+
+    The 27:1 ratio between the noisy left cluster and the quiet center
+    makes the global correction vastly too wide for the center cluster.
     """
     rng = np.random.RandomState(seed)
     centers = np.array([-0.6, 0.0, 0.6])
@@ -176,7 +184,7 @@ def _cluster_truth(X):
     mu = 3.0 * x
 
     centers = np.array([-0.6, 0.0, 0.6]).reshape(1, -1)
-    sigmas_k = np.array([1.8, 0.2, 0.8]).reshape(1, -1)
+    sigmas_k = np.array([4.0, 0.15, 0.8]).reshape(1, -1)
     scale = 0.1
 
     # Soft-assignment weights (Gaussian proximity)
@@ -349,9 +357,9 @@ def run_experiment(
 # PLOTTING
 # =============================================================================
 
-def plot_step_variance(res, output_path, show=True):
+def plot_smooth_hetero(res, output_path, show=True):
     """
-    Two-panel figure: intervals + sigma(x) step function.
+    Two-panel figure: intervals + smooth sigma(x) curve with data density.
     """
     setup_plotting()
 
@@ -369,49 +377,51 @@ def plot_step_variance(res, output_path, show=True):
     ax.plot(xg, res["int_lo_local"], color="#2ca02c", lw=1.5, zorder=2)
     ax.plot(xg, res["int_hi_local"], color="#2ca02c", lw=1.5, zorder=2)
 
-    ax.plot(xg, res["int_lo_global"], color="#d62728", ls="--", lw=2,
+    ax.plot(xg, res["int_lo_global"], color="#d62728", ls="--", lw=2.5,
             label="Global CQR", zorder=3)
-    ax.plot(xg, res["int_hi_global"], color="#d62728", ls="--", lw=2, zorder=3)
+    ax.plot(xg, res["int_hi_global"], color="#d62728", ls="--", lw=2.5, zorder=3)
 
-    ax.plot(xg, res["oracle_lo"], color="#1f77b4", ls=":", lw=2,
+    ax.plot(xg, res["oracle_lo"], color="#1f77b4", ls=":", lw=2.5,
             label="Oracle", zorder=4)
-    ax.plot(xg, res["oracle_hi"], color="#1f77b4", ls=":", lw=2, zorder=4)
+    ax.plot(xg, res["oracle_hi"], color="#1f77b4", ls=":", lw=2.5, zorder=4)
 
     ax.set_ylabel(r"$Y$", fontsize=14)
-    ax.set_title("Step-Variance: Localized CQR adapts to abrupt noise changes",
-                 fontsize=14)
-    ax.legend(loc="upper left", fontsize=11)
+    ax.legend(loc="upper left", fontsize=12)
     ax.set_xlim(-1.05, 1.05)
     ax.tick_params(labelbottom=False)
     ax.grid(True, alpha=0.3)
 
-    # ---- Bottom: sigma(x) ----
+    # ---- Bottom: sigma(x) + data density ----
     ax2 = fig.add_subplot(gs[1], sharex=ax)
-    _, sigma_grid = _step_variance_truth(res["X_grid"])
+    
+    # Histogram of training X (data density)
+    ax2.hist(res["X_train"].ravel(), bins=100, density=True,
+             alpha=0.4, color="#1f77b4", edgecolor="none", label="Data density")
+    
+    # Smooth sigma(x) curve
+    _, sigma_grid = _smooth_hetero_truth(res["X_grid"])
     sigma_grid = sigma_grid.ravel()
-
-    colors_map = {0.3: "#2ca02c", 2.0: "#d62728", 0.5: "#ff7f0e"}
-    labels_map = {0.3: r"$\sigma=0.3$  (quiet center)",
-                  2.0: r"$\sigma=2.0$  (noisy mid-zone)",
-                  0.5: r"$\sigma=0.5$  (moderate edges)"}
-    prev_s = sigma_grid[0]
-    start = 0
-    for i in range(1, len(sigma_grid)):
-        if sigma_grid[i] != prev_s or i == len(sigma_grid) - 1:
-            end = i if sigma_grid[i] != prev_s else i + 1
-            c = colors_map.get(prev_s, "gray")
-            lab = labels_map.pop(prev_s, None)
-            ax2.fill_between(xg[start:end], 0, sigma_grid[start:end],
-                             color=c, alpha=0.5, label=lab)
-            start = i
-            prev_s = sigma_grid[i]
-
+    
+    # Plot on twin axis
+    ax3 = ax2.twinx()
+    ax3.plot(xg, sigma_grid, color="#d62728", lw=3, alpha=0.8,
+             label=r"$\sigma(x) = 0.2 + 3x^2$")
+    ax3.fill_between(xg, 0, sigma_grid, color="#d62728", alpha=0.15)
+    
     ax2.set_xlabel(r"$X$", fontsize=14)
-    ax2.set_ylabel(r"$\sigma(x)$", fontsize=12)
-    ax2.set_ylim(0, 2.5)
-    ax2.legend(loc="upper right", fontsize=9, ncol=3)
-    ax2.grid(True, alpha=0.3)
-
+    ax2.set_ylabel("Data density", fontsize=12, color="#1f77b4")
+    ax2.tick_params(axis="y", labelcolor="#1f77b4")
+    
+    ax3.set_ylabel(r"$\sigma(x)$", fontsize=12, color="#d62728")
+    ax3.tick_params(axis="y", labelcolor="#d62728")
+    ax3.set_ylim(0, 3.5)
+    
+    # Merge legends
+    h1, l1 = ax2.get_legend_handles_labels()
+    h3, l3 = ax3.get_legend_handles_labels()
+    ax2.legend(h1 + h3, l1 + l3, loc="upper center", fontsize=10, ncol=2)
+    
+    ax2.set_xlim(-1.05, 1.05)
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", dpi=150)
     if show:
@@ -464,7 +474,7 @@ def plot_banana(res, output_path, show=True):
 
         ax.set_xlabel(r"$X_1$", fontsize=13)
         ax.set_ylabel(r"$X_2$", fontsize=13)
-        ax.set_title(title, fontsize=14)
+        # ax.set_title(title, fontsize=14)
         ax.set_xlim(-1, 1)
         ax.set_ylim(-1, 1)
         ax.set_aspect("equal")
@@ -473,8 +483,7 @@ def plot_banana(res, output_path, show=True):
     cb.set_label(r"Interval width $|\hat{\mathcal{C}}(x)|$", fontsize=12,
                  rotation=270, labelpad=20)
 
-    fig.suptitle("Banana Data: Localized CQR tracks the oracle width along the arc",
-                 fontsize=15, y=1.02)
+    # fig.suptitle("Banana Data: Localized CQR tracks the oracle width along the arc", fontsize=15, y=1.02)
 
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", dpi=150)
@@ -514,8 +523,7 @@ def plot_clusters(res, output_path, show=True):
     ax.plot(xg, res["oracle_hi"], color="#1f77b4", ls=":", lw=2, zorder=4)
 
     ax.set_ylabel(r"$Y$", fontsize=14)
-    ax.set_title("Mixture Clusters: per-cluster noise demands local adaptation",
-                 fontsize=14)
+    # ax.set_title("Mixture Clusters: per-cluster noise demands local adaptation", fontsize=14)
     ax.legend(loc="upper left", fontsize=11)
     ax.set_xlim(-1.05, 1.05)
     ax.tick_params(labelbottom=False)
@@ -589,24 +597,30 @@ def main():
 
     os.makedirs("figures_cqr", exist_ok=True)
 
-    common = dict(alpha=alpha, hidden_dim=hidden, epochs=epochs, lr=lr,
-                  bandwidth_scale=bw_scale, seed=seed)
+    # Override defaults for these experiments:
+    # - Smaller models (hidden=32, epochs=150) so conformity scores are
+    #   non-trivial and vary across the domain.
+    # - Tighter bandwidth (scale=2.0) so local CQR truly adapts locally
+    #   instead of averaging over the whole domain.
+    # - Less training data (3000) to keep model fits imperfect.
+    common_1d = dict(alpha=alpha, hidden_dim=32, epochs=150, lr=lr,
+                     bandwidth_scale=2.0, seed=seed)
 
-    # ---------- Experiment 1: Step-Variance (1D) ----------
+    # ---------- Experiment 1: Smooth Quadratic Heteroscedasticity (1D) ----------
     res1 = run_experiment(
-        generate_step_variance, oracle_step_variance,
-        name="Step-Variance (1D)", d=1,
-        n_train=10_000, n_cal=10_000, **common,
+        generate_smooth_hetero, oracle_smooth_hetero,
+        name="Smooth Quadratic Heteroscedasticity (1D)", d=1,
+        n_train=3_000, n_cal=5_000, **common_1d,
     )
-    plot_step_variance(res1, "figures_cqr/step_variance_adaptivity.pdf", show=show)
+    plot_smooth_hetero(res1, "figures_cqr/smooth_hetero_adaptivity.pdf", show=show)
 
     # ---------- Experiment 2: Banana (2D) ----------
     res2 = run_experiment(
         generate_banana, oracle_banana,
         name="Banana / Crescent (2D)", d=2,
-        n_train=15_000, n_cal=15_000,
-        hidden_dim=128, epochs=400,
-        alpha=alpha, lr=lr, bandwidth_scale=bw_scale, seed=seed,
+        n_train=5_000, n_cal=8_000,
+        hidden_dim=64, epochs=200,
+        alpha=alpha, lr=lr, bandwidth_scale=3.0, seed=seed,
     )
     plot_banana(res2, "figures_cqr/banana_adaptivity.pdf", show=show)
 
@@ -614,7 +628,7 @@ def main():
     res3 = run_experiment(
         generate_clusters, oracle_clusters,
         name="Mixture Clusters (1D)", d=1,
-        n_train=10_000, n_cal=10_000, **common,
+        n_train=3_000, n_cal=5_000, **common_1d,
     )
     plot_clusters(res3, "figures_cqr/clusters_adaptivity.pdf", show=show)
 
