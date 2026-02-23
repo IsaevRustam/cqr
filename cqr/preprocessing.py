@@ -1,13 +1,47 @@
 """
 Data preprocessing for real-world CQR experiments.
 
-Handles train/calibration/test splitting and feature/target standardization.
+Handles train/calibration/test splitting, outlier removal,
+and feature/target standardization.
 """
 
 import numpy as np
-from typing import Dict, Any, Tuple
-from sklearn.preprocessing import StandardScaler
+from typing import Dict, Any, Tuple, Optional, Union
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.model_selection import train_test_split
+
+
+def _remove_y_outliers(
+    X: np.ndarray,
+    y: np.ndarray,
+    iqr_factor: float = 6.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Remove rows whose target value falls outside
+    [Q1 - iqr_factor * IQR, Q3 + iqr_factor * IQR].
+
+    This is applied *before* train/cal/test splitting so that no split
+    can be contaminated by extreme outliers (the root cause of rf1
+    variance across seeds).
+
+    Args:
+        X: Features (n, d)
+        y: Targets (n,)
+        iqr_factor: Multiplier for the IQR fence (default 6.0, generous).
+
+    Returns:
+        (X_clean, y_clean) with outlier rows removed.
+    """
+    q1, q3 = np.percentile(y, [25, 75])
+    iqr = q3 - q1
+    lo = q1 - iqr_factor * iqr
+    hi = q3 + iqr_factor * iqr
+    mask = (y >= lo) & (y <= hi)
+    n_removed = int((~mask).sum())
+    if n_removed > 0:
+        print(f"  [outlier cleaning] removed {n_removed}/{len(y)} rows "
+              f"(IQR factor={iqr_factor}, range=[{lo:.2f}, {hi:.2f}])")
+    return X[mask], y[mask]
 
 
 def prepare_data(
@@ -20,6 +54,8 @@ def prepare_data(
     standardize_x: bool = True,
     standardize_y: bool = True,
     target_col: int = 0,
+    clip_outliers_iqr: Optional[float] = None,
+    robust_scale_y: bool = False,
 ) -> Dict[str, Any]:
     """
     Split data into train/calibration/test and standardize.
@@ -40,12 +76,19 @@ def prepare_data(
         standardize_y: Whether to standardize target
         target_col: Which output column to use for multi-output datasets
                      (default 0 = first column). Ignored for scalar targets.
+        clip_outliers_iqr: If not None, remove rows whose target falls
+                           outside [Q1 - k*IQR, Q3 + k*IQR] where k is
+                           this value.  Applied before splitting.
+        robust_scale_y: If True and standardize_y is True, use
+                        sklearn.preprocessing.RobustScaler (median / IQR)
+                        instead of StandardScaler for the target.  This
+                        makes the scaling insensitive to extreme values.
 
     Returns:
         Dict with keys:
             X_train, Y_train, X_cal, Y_cal, X_test, Y_test: np.float32 arrays
             scaler_x: fitted StandardScaler for X (or None)
-            scaler_y: fitted StandardScaler for y (or None)
+            scaler_y: fitted scaler for y — StandardScaler or RobustScaler (or None)
             n_train, n_cal, n_test: split sizes
     """
     X = np.asarray(X, dtype=np.float32)
@@ -57,6 +100,10 @@ def prepare_data(
             f"target_col={target_col} out of range for y with {y.shape[1]} outputs"
         y = y[:, target_col]
     y = y.flatten()
+
+    # ---- Outlier removal (applied before splitting) ----
+    if clip_outliers_iqr is not None:
+        X, y = _remove_y_outliers(X, y, iqr_factor=clip_outliers_iqr)
 
     assert abs(train_frac + cal_frac + test_frac - 1.0) < 1e-6, \
         f"Fractions must sum to 1, got {train_frac + cal_frac + test_frac}"
@@ -86,7 +133,10 @@ def prepare_data(
     # Standardize target
     scaler_y = None
     if standardize_y:
-        scaler_y = StandardScaler()
+        if robust_scale_y:
+            scaler_y = RobustScaler()   # centres on median, scales by IQR
+        else:
+            scaler_y = StandardScaler()
         y_train = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten().astype(np.float32)
         y_cal = scaler_y.transform(y_cal.reshape(-1, 1)).flatten().astype(np.float32)
         y_test = scaler_y.transform(y_test.reshape(-1, 1)).flatten().astype(np.float32)
@@ -113,17 +163,19 @@ def prepare_data(
 
 def inverse_transform_width(
     width: float,
-    scaler_y: StandardScaler,
+    scaler_y: Union[StandardScaler, RobustScaler, None],
 ) -> float:
     """
     Convert interval width from standardized scale back to original scale.
 
-    Since standardization is affine: y_std = (y - mu) / sigma,
-    an interval of width w in standardized space has width w * sigma in original space.
+    Works for both StandardScaler (scale_ = std) and RobustScaler
+    (scale_ = IQR).  In either case the transform is affine, so
+    an interval of width w in scaled space has width  w * scale_  in
+    original space.
 
     Args:
         width: Width in standardized space
-        scaler_y: Fitted StandardScaler for y
+        scaler_y: Fitted scaler for y (StandardScaler or RobustScaler), or None
 
     Returns:
         Width in original scale

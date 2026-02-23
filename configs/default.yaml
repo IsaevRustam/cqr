@@ -14,6 +14,7 @@ n_attempts: 50       # Number of Monte Carlo repetitions
 hidden_dim: 64       # Hidden layer width
 train_epochs: 300    # Training epochs
 learning_rate: 0.01  # Adam learning rate
+activation: relu     # Activation function: relu or requ
 
 # Sample size grid (for convergence experiments)
 n_grid_start: 100

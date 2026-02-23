@@ -68,6 +68,9 @@ def load_bin_data(csv_path: str = "results_real_data.csv") -> pd.DataFrame:
     df_bins["Bin Number"] = df_bins["Bin"].str.extract(r"(\d+)").astype(int)
     # Sort by Bin Rank (prediction-interval width rank) for consistent ordering
     df_bins = df_bins.sort_values(["Dataset", "Method", "Bin Rank"])
+    # Ensure Activation column exists (backward compat)
+    if "Activation" not in df_bins.columns:
+        df_bins["Activation"] = "REQU"  # legacy default
     return df_bins
 
 
@@ -76,7 +79,7 @@ def load_bin_data(csv_path: str = "results_real_data.csv") -> pd.DataFrame:
 # ============================================================================
 
 def plot_bin_coverage(df: pd.DataFrame, datasets: list, save_dir: str = "figures_cqr",
-                      save_formats=("png",)):
+                      save_formats=("png",), filename_suffix: str = ""):
     """Grouped bar chart of per-bin coverage for each dataset."""
     n_ds = len(datasets)
     fig, axes = plt.subplots(1, n_ds, figsize=(3.2 * n_ds, 3.5), sharey=False)
@@ -137,7 +140,7 @@ def plot_bin_coverage(df: pd.DataFrame, datasets: list, save_dir: str = "figures
 
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     for fmt in save_formats:
-        fp = Path(save_dir) / f"bin_coverage.{fmt}"
+        fp = Path(save_dir) / f"bin_coverage{filename_suffix}.{fmt}"
         fig.savefig(fp, dpi=300, bbox_inches="tight", format=fmt, facecolor="white")
         print(f"Saved: {fp}")
     plt.show()
@@ -149,7 +152,7 @@ def plot_bin_coverage(df: pd.DataFrame, datasets: list, save_dir: str = "figures
 # ============================================================================
 
 def plot_bin_width(df: pd.DataFrame, datasets: list, save_dir: str = "figures_cqr",
-                   save_formats=("png",)):
+                   save_formats=("png",), filename_suffix: str = ""):
     """Grouped bar chart of per-bin average width for each dataset."""
     n_ds = len(datasets)
     fig, axes = plt.subplots(1, n_ds, figsize=(3.2 * n_ds, 3.5), sharey=False)
@@ -193,7 +196,7 @@ def plot_bin_width(df: pd.DataFrame, datasets: list, save_dir: str = "figures_cq
 
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     for fmt in save_formats:
-        fp = Path(save_dir) / f"bin_width.{fmt}"
+        fp = Path(save_dir) / f"bin_width{filename_suffix}.{fmt}"
         fig.savefig(fp, dpi=300, bbox_inches="tight", format=fmt, facecolor="white")
         print(f"Saved: {fp}")
     plt.show()
@@ -205,7 +208,7 @@ def plot_bin_width(df: pd.DataFrame, datasets: list, save_dir: str = "figures_cq
 # ============================================================================
 
 def plot_bin_combined(df: pd.DataFrame, datasets: list, save_dir: str = "figures_cqr",
-                      save_formats=("png",)):
+                      save_formats=("png",), filename_suffix: str = ""):
     """Two-row panel: top = coverage per bin, bottom = width per bin."""
     n_ds = len(datasets)
     fig, axes = plt.subplots(2, n_ds, figsize=(3.2 * n_ds, 6.0), sharey="row")
@@ -289,7 +292,7 @@ def plot_bin_combined(df: pd.DataFrame, datasets: list, save_dir: str = "figures
 
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     for fmt in save_formats:
-        fp = Path(save_dir) / f"bin_combined.{fmt}"
+        fp = Path(save_dir) / f"bin_combined{filename_suffix}.{fmt}"
         fig.savefig(fp, dpi=300, bbox_inches="tight", format=fmt, facecolor="white")
         print(f"Saved: {fp}")
     plt.show()
@@ -335,24 +338,39 @@ def print_bin_summary(df: pd.DataFrame, datasets: list):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot per-bin CQR results")
-    parser.add_argument("--csv", default="results_real_data.csv", help="Results CSV")
+    parser.add_argument("--csv", nargs="+", default=["results_real_data.csv"],
+                        help="Results CSV(s) — multiple files are concatenated")
     parser.add_argument("--save_dir", default="figures_cqr", help="Output directory")
     parser.add_argument("--formats", nargs="+", default=["pdf"], help="Save formats")
     args = parser.parse_args()
 
-    df = load_bin_data(args.csv)
+    # Load and concatenate all CSVs
+    frames = [load_bin_data(p) for p in args.csv]
+    df = pd.concat(frames, ignore_index=True)
     datasets = [ds for ds in DATASETS if ds in df["Dataset"].unique()]
 
     print(f"Datasets found: {datasets}")
     print(f"Total bin rows: {len(df)}")
 
-    # Console summary
-    print_bin_summary(df, datasets)
+    activations = sorted(df["Activation"].unique().tolist())
 
-    # Figures
-    plot_bin_coverage(df, datasets, save_dir=args.save_dir, save_formats=tuple(args.formats))
-    plot_bin_width(df, datasets, save_dir=args.save_dir, save_formats=tuple(args.formats))
-    plot_bin_combined(df, datasets, save_dir=args.save_dir, save_formats=tuple(args.formats))
+    for act in activations:
+        df_act = df[df["Activation"] == act].copy()
+        act_lower = act.lower()
+        suffix = f"_{act_lower}" if len(activations) > 1 else ""
+
+        print(f"\n--- Activation: {act} ---")
+        # Console summary
+        print_bin_summary(df_act, datasets)
+
+        # Figures
+        ds_act = [ds for ds in datasets if ds in df_act["Dataset"].unique()]
+        plot_bin_coverage(df_act, ds_act, save_dir=args.save_dir,
+                          save_formats=tuple(args.formats), filename_suffix=suffix)
+        plot_bin_width(df_act, ds_act, save_dir=args.save_dir,
+                       save_formats=tuple(args.formats), filename_suffix=suffix)
+        plot_bin_combined(df_act, ds_act, save_dir=args.save_dir,
+                          save_formats=tuple(args.formats), filename_suffix=suffix)
 
 
 if __name__ == "__main__":

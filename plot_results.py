@@ -90,9 +90,13 @@ def load_results(csv_path: str = "results_real_data.csv") -> pd.DataFrame:
     # If new format with Bin column, keep only Overall rows
     if "Bin" in df.columns:
         df = df[df["Bin"] == "Overall"].copy()
+    # Ensure Activation column exists (backward compat)
+    if "Activation" not in df.columns:
+        df["Activation"] = "REQU"  # legacy default
     print(f"Loaded {csv_path}: {len(df)} rows")
-    print(f"  Datasets: {df['Dataset'].unique().tolist()}")
-    print(f"  Methods:  {df['Method'].unique().tolist()}")
+    print(f"  Datasets:    {df['Dataset'].unique().tolist()}")
+    print(f"  Methods:     {df['Method'].unique().tolist()}")
+    print(f"  Activations: {df['Activation'].unique().tolist()}")
     return df
 
 
@@ -207,7 +211,8 @@ def plot_one_figure_per_metric(
     global_ylim=False,
     show_error_bars=True,
     bar_width=0.55,
-    save_formats=('png',) # pdf
+    save_formats=('png',),  # pdf
+    filename_suffix="",
 ):
     """Create one figure per metric with all datasets as subplots."""
     if datasets is None:
@@ -261,7 +266,7 @@ def plot_one_figure_per_metric(
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", metric_key)
     for fmt in save_formats:
-        fp = Path(save_dir) / f"{safe}.{fmt}"
+        fp = Path(save_dir) / f"{safe}{filename_suffix}.{fmt}"
         fig.savefig(fp, dpi=dpi, bbox_inches="tight", format=fmt, facecolor='white')
         print(f"Saved: {fp}")
 
@@ -374,44 +379,55 @@ def print_summary_table(df, method_order, datasets):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot CQR results")
-    parser.add_argument("--csv", default="results_real_data.csv", help="Results CSV")
+    parser.add_argument("--csv", nargs="+", default=["results_real_data.csv"],
+                        help="Results CSV(s) — multiple files are concatenated")
     parser.add_argument("--save_dir", default="figures_cqr", help="Output directory")
     parser.add_argument("--formats", nargs="+", default=["pdf"], help="Save formats")
     args = parser.parse_args()
 
-    df = load_results(args.csv)
-    datasets = ["bio", "community", "rf1", "scm1d", "scm20d"] # df["Dataset"].unique().tolist()
+    # Load and concatenate all CSVs
+    frames = [load_results(p) for p in args.csv]
+    df = pd.concat(frames, ignore_index=True)
+    datasets = ["bio", "community", "rf1", "scm1d", "scm20d"]  # df["Dataset"].unique().tolist()
 
-    # Print summary
-    print_summary_table(df, METHOD_ORDER, datasets)
+    activations = sorted(df["Activation"].unique().tolist())
 
-    # Individual metric figures
-    for metric_key, metric_cfg in METRICS_CONFIG.items():
-        plot_one_figure_per_metric(
-            df, metric_key, metric_cfg,
+    for act in activations:
+        df_act = df[df["Activation"] == act].copy()
+        act_lower = act.lower()
+        suffix = f"_{act_lower}" if len(activations) > 1 else ""
+
+        # Print summary
+        print_summary_table(df_act, METHOD_ORDER, datasets)
+
+        # Individual metric figures
+        for metric_key, metric_cfg in METRICS_CONFIG.items():
+            plot_one_figure_per_metric(
+                df_act, metric_key, metric_cfg,
+                method_order=METHOD_ORDER,
+                method_colors=METHOD_COLORS,
+                datasets=datasets,
+                ncols=len(datasets),
+                figsize_per_ax=(2.8, 2.8),
+                save_dir=args.save_dir,
+                global_ylim=False,
+                show_error_bars=True,
+                bar_width=0.55,
+                save_formats=args.formats,
+                filename_suffix=suffix,
+            )
+
+        # Combined grid figure
+        plot_all_metrics_grid(
+            df_act,
+            METRICS_CONFIG,
             method_order=METHOD_ORDER,
             method_colors=METHOD_COLORS,
             datasets=datasets,
-            ncols=len(datasets),
-            figsize_per_ax=(2.8, 2.8),
+            figsize_per_ax=(2.6, 2.6),
             save_dir=args.save_dir,
-            global_ylim=False,
-            show_error_bars=True,
-            bar_width=0.55,
             save_formats=args.formats,
         )
-
-    # Combined grid figure
-    plot_all_metrics_grid(
-        df,
-        METRICS_CONFIG,
-        method_order=METHOD_ORDER,
-        method_colors=METHOD_COLORS,
-        datasets=datasets,
-        figsize_per_ax=(2.6, 2.6),
-        save_dir=args.save_dir,
-        save_formats=args.formats,
-    )
 
 
 if __name__ == "__main__":

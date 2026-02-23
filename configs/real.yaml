@@ -4,13 +4,14 @@ seed: 42
 # Monte Carlo repetitions
 n_attempts: 10
 
-# ReQU neural network settings
+# Neural network settings
 hidden_dim: 128
 train_epochs: 500
 learning_rate: 0.001
 batch_size: 256
 weight_decay: 0.00001
 n_layers: 2
+activation: requ     # Activation function: relu or requ
 
 # Localized CQR bandwidth (Silverman factor × median distance)
 bandwidth_scale: 1.0

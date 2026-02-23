@@ -28,7 +28,7 @@ from typing import Dict, Any, List, Optional
 
 from cqr.real_data import load_dataset, DEFAULT_DATASETS, list_datasets
 from cqr.preprocessing import prepare_data, inverse_transform_width
-from cqr.models_requ import train_requ_quantile_models
+from cqr.training import train_quantile_models_unified
 from cqr.calibration import (
     compute_conformity_scores,
     global_calibration,
@@ -56,6 +56,13 @@ def load_real_config(path: Optional[str]) -> Dict[str, Any]:
         "n_layers": 2,
         "bandwidth_scale": 1.0,
         "n_cond_bins": 5,
+        "activation": "requ",
+        "clip_outliers_iqr": None,       # IQR factor for y-outlier removal
+        # Per-dataset overrides: key = dataset name, value = dict of overrides
+        "dataset_overrides": {
+            # rf1: 64 features, ~8757 samples → 128-unit NN overfits badly
+            "rf1": {"hidden_dim": 32, "weight_decay": 1e-3},
+        },
     }
     if path is not None:
         import yaml
@@ -86,14 +93,19 @@ def evaluate_single_run(
     tau_high = 1 - alpha / 2
     d = X.shape[1]
 
-    # Split data
-    data = prepare_data(X, y, train_frac=0.4, cal_frac=0.3, test_frac=0.3, seed=seed)
+    # Split data (with optional outlier cleaning / robust scaling)
+    data = prepare_data(
+        X, y, train_frac=0.4, cal_frac=0.3, test_frac=0.3, seed=seed,
+        clip_outliers_iqr=cfg.get("clip_outliers_iqr"),
+        robust_scale_y=cfg.get("robust_scale_y", False),
+    )
 
     X_train = torch.from_numpy(data["X_train"])
     Y_train = torch.from_numpy(data["Y_train"])
 
-    # Train ReQU quantile models
-    model_lo, model_hi = train_requ_quantile_models(
+    # Train quantile models (activation from config: relu or requ)
+    activation = cfg.get("activation", "requ")
+    model_lo, model_hi = train_quantile_models_unified(
         X_train, Y_train,
         tau_low=tau_low, tau_high=tau_high,
         input_dim=d,
@@ -103,7 +115,10 @@ def evaluate_single_run(
         lr=cfg["learning_rate"],
         batch_size=cfg["batch_size"],
         weight_decay=cfg["weight_decay"],
+        grad_clip=cfg.get("grad_clip", 1.0),
+        activation=activation,
         verbose=cfg.get("verbose", True),
+        seed=seed,
     )
 
     # Predict on calibration set
@@ -111,6 +126,13 @@ def evaluate_single_run(
         X_cal_t = torch.from_numpy(data["X_cal"])
         pred_cal_lo = model_lo(X_cal_t).numpy().flatten()
         pred_cal_hi = model_hi(X_cal_t).numpy().flatten()
+
+    # Fix quantile crossing: ensure lo ≤ hi
+    crossed_cal = pred_cal_lo > pred_cal_hi
+    if crossed_cal.any():
+        pred_cal_lo[crossed_cal], pred_cal_hi[crossed_cal] = (
+            pred_cal_hi[crossed_cal].copy(), pred_cal_lo[crossed_cal].copy()
+        )
 
     # Conformity scores
     scores = compute_conformity_scores(pred_cal_lo, pred_cal_hi, data["Y_cal"])
@@ -120,6 +142,15 @@ def evaluate_single_run(
         X_test_t = torch.from_numpy(data["X_test"])
         pred_test_lo = model_lo(X_test_t).numpy().flatten()
         pred_test_hi = model_hi(X_test_t).numpy().flatten()
+
+    # Fix quantile crossing: ensure lo ≤ hi
+    crossed_test = pred_test_lo > pred_test_hi
+    if crossed_test.any():
+        n_crossed = int(crossed_test.sum())
+        print(f"    [warning] {n_crossed}/{len(pred_test_lo)} test points had crossed quantiles (swapped)")
+        pred_test_lo[crossed_test], pred_test_hi[crossed_test] = (
+            pred_test_hi[crossed_test].copy(), pred_test_lo[crossed_test].copy()
+        )
 
     # =========================================================================
     # GLOBAL CQR
@@ -222,6 +253,13 @@ def run_dataset_evaluation(
 
     if verbose:
         print(f"  n={info['n_samples']}, d={info['n_features']}, {info['description']}")
+
+    # Apply per-dataset config overrides (e.g. rf1 → clip_outliers_iqr)
+    dataset_overrides = cfg.get("dataset_overrides", {})
+    if name in dataset_overrides:
+        cfg = {**cfg, **dataset_overrides[name]}
+        if verbose:
+            print(f"  [config] dataset overrides applied: {dataset_overrides[name]}")
 
     n_attempts = cfg["n_attempts"]
     base_seed = cfg["seed"]
@@ -329,6 +367,7 @@ def aggregate_results(
     n_features: int,
     runs: List[Dict[str, Any]],
     alpha: float,
+    activation: str = "requ",
 ) -> List[Dict[str, Any]]:
     """
     Aggregate multiple runs into summary rows (one per method) plus per-bin detail rows.
@@ -358,6 +397,7 @@ def aggregate_results(
             "n": n_samples,
             "d": n_features,
             "Method": method_label,
+            "Activation": activation.upper(),
             "Bin": "Overall",
             "Bin ID": "",
             "Bin Rank": "",
@@ -406,6 +446,7 @@ def aggregate_results(
                     "n": n_samples,
                     "d": n_features,
                     "Method": method_label,
+                    "Activation": activation.upper(),
                     "Bin": f"Bin {rank}",
                     "Bin ID": bs["bin_id"],
                     "Bin Rank": rank,
@@ -432,7 +473,7 @@ def aggregate_results(
 # =============================================================================
 
 DISPLAY_COLUMNS = [
-    "Dataset", "n", "d", "Method", "Bin", "Bin ID", "Bin Rank", "Target Coverage",
+    "Dataset", "n", "d", "Method", "Activation", "Bin", "Bin ID", "Bin Rank", "Target Coverage",
     "Coverage (mean)", "Coverage (std)",
     "Avg Width (mean)", "Avg Width (std)", "Avg Width (orig)",
     "Worst-Bin Cov (mean)", "Worst-Bin Cov (std)",
@@ -446,7 +487,7 @@ def print_results_table(df: pd.DataFrame) -> None:
     # Filter to Overall rows for the display table
     display_df = df[df["Bin"] == "Overall"].copy()
     display_cols = [
-        "Dataset", "n", "d", "Method", "Target Coverage",
+        "Dataset", "n", "d", "Method", "Activation", "Target Coverage",
         "Coverage (mean)", "Coverage (std)",
         "Avg Width (mean)", "Avg Width (std)", "Avg Width (orig)",
         "Worst-Bin Cov (mean)", "Worst-Bin Cov (std)",
@@ -454,12 +495,12 @@ def print_results_table(df: pd.DataFrame) -> None:
     ]
     display = display_df[display_cols].copy()
     # Format numeric columns to 3 decimal places for readability
-    float_cols = [c for c in display_cols if c not in ("Dataset", "n", "d", "Method", "Target Coverage")]
+    float_cols = [c for c in display_cols if c not in ("Dataset", "n", "d", "Method", "Activation", "Target Coverage")]
     for c in float_cols:
         display[c] = display[c].map(lambda x: f"{x:.3f}" if isinstance(x, float) else x)
 
     print("\n" + "=" * 150)
-    print("RESULTS: Global CQR vs Localized CQR (ReQU Neural Network) — Overall Summary")
+    print("RESULTS: Global CQR vs Localized CQR — Overall Summary")
     print("=" * 150)
     print(display.to_string(index=False))
     print("=" * 150)
@@ -508,7 +549,10 @@ def main():
     parser.add_argument("--train_epochs", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--bandwidth_scale", type=float, default=None)
-    parser.add_argument("--output", type=str, default="results_real_data.csv", help="Output CSV path")
+    parser.add_argument("--activation", type=str, default=None,
+                        choices=["relu", "requ"],
+                        help="Activation function (default: from config, fallback requ)")
+    parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     parser.add_argument("--quiet", action="store_true", help="Suppress per-run output")
     args = parser.parse_args()
 
@@ -517,17 +561,20 @@ def main():
     cfg = load_real_config(config_path)
 
     # Apply CLI overrides
-    for key in ["alpha", "n_attempts", "hidden_dim", "train_epochs", "batch_size", "bandwidth_scale"]:
+    for key in ["alpha", "n_attempts", "hidden_dim", "train_epochs", "batch_size", "bandwidth_scale", "activation"]:
         val = getattr(args, key, None)
         if val is not None:
             cfg[key] = val
+
+    activation = cfg.get("activation", "requ")
+    output_path = args.output if args.output else f"results_real_data_{activation}.csv"
 
     datasets = args.datasets if args.datasets else DEFAULT_DATASETS
 
     print("=" * 70)
     print("Global CQR vs Localized CQR — Real Data Evaluation")
     print("=" * 70)
-    print(f"Model: ReQU NN (hidden={cfg['hidden_dim']}, layers={cfg['n_layers']}, "
+    print(f"Model: {activation.upper()} NN (hidden={cfg['hidden_dim']}, layers={cfg['n_layers']}, "
           f"epochs={cfg['train_epochs']}, lr={cfg['learning_rate']})")
     print(f"Alpha: {cfg['alpha']} (target coverage: {1-cfg['alpha']:.0%})")
     print(f"Repetitions: {cfg['n_attempts']}")
@@ -554,7 +601,7 @@ def main():
 
         rows = aggregate_results(
             ds_name, info["n_samples"], info["n_features"],
-            runs, cfg["alpha"],
+            runs, cfg["alpha"], activation=activation,
         )
         all_rows.extend(rows)
 
@@ -571,7 +618,6 @@ def main():
     print_results_table(df)
 
     # Save full results to CSV
-    output_path = args.output
     df.to_csv(output_path, index=False)
     print(f"Full results saved to: {output_path}")
 

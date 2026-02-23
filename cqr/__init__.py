@@ -8,6 +8,7 @@ for arbitrary input dimensions d ∈ {1, 2, ...}.
 from .config import ExperimentConfig, load_config
 from .models import QuantileNN, quantile_loss
 from .models_requ import ReQU, QuantileReQUNN, train_requ_quantile_models
+from .training import train_quantile_models_unified
 from .real_data import load_dataset, list_datasets, DATASET_REGISTRY, DEFAULT_DATASETS
 from .metrics import (
     marginal_coverage, average_width, median_width, width_std,
@@ -48,6 +49,8 @@ __all__ = [
     "ReQU",
     "QuantileReQUNN",
     "train_requ_quantile_models",
+    # Unified training
+    "train_quantile_models_unified",
     # Real data
     "load_dataset",
     "list_datasets",

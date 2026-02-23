@@ -47,6 +47,7 @@ class ExperimentConfig:
     hidden_dim: int = 64
     train_epochs: int = 300
     learning_rate: float = 0.01
+    activation: str = "relu"  # "relu" or "requ"
 
     # Sample size grid (for convergence experiments)
     n_grid_start: int = 100

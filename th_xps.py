@@ -44,7 +44,7 @@ from cqr import (
     average_width,
     conditional_coverage,
 )
-from cqr.models import train_quantile_models
+from cqr.training import train_quantile_models_unified
 from cqr.calibration import compute_bandwidth
 
 
@@ -56,6 +56,40 @@ def _oracle_bounds(mu, sigma, alpha):
     """mu ± z_{1-alpha/2} * sigma  →  (lo, hi) each shape (n,)."""
     z = norm.ppf(1 - alpha / 2)
     return (mu - z * sigma), (mu + z * sigma)
+
+
+# ---- Experiment 0: Step-Variance (1D) [legacy] -----------------------------
+
+def generate_step_variance(n, seed=None):
+    """
+    X ~ Uniform[-1, 1],  Y = mu(x) + sigma(x) * eps,  eps ~ N(0,1).
+
+    mu(x)    = 2 sin(3x)
+    sigma(x) = { 0.3   if |x| < 0.35
+               { 2.0   if 0.35 <= |x| < 0.7
+               { 0.5   if |x| >= 0.7
+    """
+    rng = np.random.RandomState(seed)
+    X = rng.uniform(-1, 1, size=(n, 1)).astype(np.float32)
+    mu, sigma = _step_variance_truth(X)
+    eps = rng.randn(n, 1).astype(np.float32)
+    Y = (mu + sigma * eps).astype(np.float32)
+    return X, Y
+
+
+def _step_variance_truth(X):
+    """Return (mu, sigma) each shape (n, 1)."""
+    x = X.reshape(-1, 1).astype(np.float64)
+    ax = np.abs(x)
+    mu = 2.0 * np.sin(3.0 * x)
+    sigma = np.where(ax < 0.35, 0.3,
+                     np.where(ax < 0.7, 2.0, 0.5))
+    return mu.astype(np.float32), sigma.astype(np.float32)
+
+
+def oracle_step_variance(X, alpha):
+    mu, sigma = _step_variance_truth(X)
+    return _oracle_bounds(mu.ravel(), sigma.ravel(), alpha)
 
 
 # ---- Experiment 1: Smooth Quadratic Heteroscedasticity (1D) ----------------
@@ -229,6 +263,7 @@ def run_experiment(
     lr: float = 0.01,
     bandwidth_scale: float = 6.0,
     seed: int = 42,
+    activation: str = "relu",
 ):
     """
     Train quantile models, calibrate (global + local), return results dict.
@@ -244,6 +279,7 @@ def run_experiment(
     print(f"Experiment: {name}")
     print(f"{'=' * 60}")
     print(f"  n_train={n_train}, n_cal={n_cal}, alpha={alpha}, d={d}")
+    print(f"  activation={activation}")
     print(f"  bandwidth h={h:.4f}  (scale={bandwidth_scale})")
 
     # ---- generate data ----
@@ -255,11 +291,14 @@ def run_experiment(
     X_t = torch.from_numpy(X_train)
     Y_t = torch.from_numpy(Y_train)
 
-    print("  Training quantile networks …")
-    model_lo, model_hi = train_quantile_models(
+    print(f"  Training quantile networks ({activation.upper()}) \u2026")
+    model_lo, model_hi = train_quantile_models_unified(
         X_t, Y_t, tau_lo, tau_hi,
         input_dim=d, hidden_dim=hidden_dim,
-        epochs=epochs, lr=lr, verbose=False,
+        n_layers=2, epochs=epochs, lr=lr,
+        batch_size=0, weight_decay=1e-5,
+        grad_clip=1.0, activation=activation,
+        verbose=False, seed=seed,
     )
     print("  Training complete.")
 
@@ -356,6 +395,76 @@ def run_experiment(
 # =============================================================================
 # PLOTTING
 # =============================================================================
+
+def plot_step_variance(res, output_path, show=True):
+    """
+    Two-panel figure: intervals + sigma(x) step function.
+    """
+    setup_plotting()
+
+    xg = res["X_grid"].ravel()
+    fig = plt.figure(figsize=(11, 8))
+    gs = GridSpec(2, 1, height_ratios=[3, 1], hspace=0.06)
+
+    # ---- Top: intervals ----
+    ax = fig.add_subplot(gs[0])
+    ax.scatter(res["X_scatter"].ravel(), res["Y_scatter"].ravel(),
+               s=12, alpha=0.35, c="gray", edgecolors="none", label="Test data", zorder=1)
+
+    ax.fill_between(xg, res["int_lo_local"], res["int_hi_local"],
+                    alpha=0.30, color="#2ca02c", label="Localized CQR", zorder=2)
+    ax.plot(xg, res["int_lo_local"], color="#2ca02c", lw=1.5, zorder=2)
+    ax.plot(xg, res["int_hi_local"], color="#2ca02c", lw=1.5, zorder=2)
+
+    ax.plot(xg, res["int_lo_global"], color="#d62728", ls="--", lw=2,
+            label="Global CQR", zorder=3)
+    ax.plot(xg, res["int_hi_global"], color="#d62728", ls="--", lw=2, zorder=3)
+
+    ax.plot(xg, res["oracle_lo"], color="#1f77b4", ls=":", lw=2,
+            label="Oracle", zorder=4)
+    ax.plot(xg, res["oracle_hi"], color="#1f77b4", ls=":", lw=2, zorder=4)
+
+    ax.set_ylabel(r"$Y$", fontsize=14)
+    ax.legend(loc="upper left", fontsize=11)
+    ax.set_xlim(-1.05, 1.05)
+    ax.tick_params(labelbottom=False)
+    ax.grid(True, alpha=0.3)
+
+    # ---- Bottom: sigma(x) step function ----
+    ax2 = fig.add_subplot(gs[1], sharex=ax)
+    _, sigma_grid = _step_variance_truth(res["X_grid"])
+    sigma_grid = sigma_grid.ravel()
+
+    colors_map = {0.3: "#2ca02c", 2.0: "#d62728", 0.5: "#ff7f0e"}
+    labels_map = {0.3: r"$\sigma=0.3$  (quiet center)",
+                  2.0: r"$\sigma=2.0$  (noisy mid-zone)",
+                  0.5: r"$\sigma=0.5$  (moderate edges)"}
+    prev_s = sigma_grid[0]
+    start = 0
+    for i in range(1, len(sigma_grid)):
+        if sigma_grid[i] != prev_s or i == len(sigma_grid) - 1:
+            end = i if sigma_grid[i] != prev_s else i + 1
+            c = colors_map.get(prev_s, "gray")
+            lab = labels_map.pop(prev_s, None)
+            ax2.fill_between(xg[start:end], 0, sigma_grid[start:end],
+                             color=c, alpha=0.5, label=lab)
+            start = i
+            prev_s = sigma_grid[i]
+
+    ax2.set_xlabel(r"$X$", fontsize=14)
+    ax2.set_ylabel(r"$\sigma(x)$", fontsize=12)
+    ax2.set_ylim(0, 2.5)
+    ax2.legend(loc="upper right", fontsize=9, ncol=3)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight", dpi=150)
+    if show:
+        plt.show()
+    else:
+        plt.close()
+    print(f"  Saved \u2192 {output_path}")
+
 
 def plot_smooth_hetero(res, output_path, show=True):
     """
@@ -459,7 +568,7 @@ def plot_banana(res, output_path, show=True):
     titles = ["Localized CQR", "Global CQR", "Oracle"]
     grids = [w_local, w_global, w_oracle]
 
-    for ax, title, wg in zip(axes, titles, grids):
+    for idx, (ax, title, wg) in enumerate(zip(axes, titles, grids)):
         cf = ax.contourf(X1g, X2g, wg, levels=levels, cmap="YlGnBu_r",
                          vmin=vmin, vmax=vmax)
         # Density contours (banana shape)
@@ -473,14 +582,20 @@ def plot_banana(res, output_path, show=True):
         ax.clabel(cs, inline=True, fontsize=8, fmt=fmt)
 
         ax.set_xlabel(r"$X_1$", fontsize=13)
-        ax.set_ylabel(r"$X_2$", fontsize=13)
-        # ax.set_title(title, fontsize=14)
         ax.set_xlim(-1, 1)
         ax.set_ylim(-1, 1)
         ax.set_aspect("equal")
 
+        # Move y-axis to the right for the 3rd panel (Oracle)
+        if idx == 2:
+            ax.yaxis.set_label_position("right")
+            ax.yaxis.tick_right()
+            ax.set_ylabel(r"$X_2$", fontsize=13)
+        else:
+            ax.set_ylabel(r"$X_2$", fontsize=13)
+
     cb = fig.colorbar(cf, ax=axes.tolist(), shrink=0.82, pad=0.02)
-    cb.set_label(r"Interval width $|\hat{\mathcal{C}}(x)|$", fontsize=12,
+    cb.set_label(r"Interval length $|\hat{\mathcal{C}}(x)|$", fontsize=12,
                  rotation=270, labelpad=20)
 
     # fig.suptitle("Banana Data: Localized CQR tracks the oracle width along the arc", fontsize=15, y=1.02)
@@ -579,6 +694,9 @@ def main():
                         help="Path to YAML config (default: built-in defaults)")
     parser.add_argument("--no-show", action="store_true",
                         help="Save figures without displaying them")
+    parser.add_argument("--activation", type=str, default="relu",
+                        choices=["relu", "requ"],
+                        help="Activation function for quantile NN (default: relu)")
     args = parser.parse_args()
 
     # Load (or default) config
@@ -594,6 +712,8 @@ def main():
     bw_scale = cfg.bandwidth_scale
     seed = cfg.seed
     show = not args.no_show
+    activation = args.activation
+    act_suffix = f"_{activation}"  # e.g. "_relu" or "_requ"
 
     os.makedirs("figures_cqr", exist_ok=True)
 
@@ -604,7 +724,15 @@ def main():
     #   instead of averaging over the whole domain.
     # - Less training data (3000) to keep model fits imperfect.
     common_1d = dict(alpha=alpha, hidden_dim=32, epochs=150, lr=lr,
-                     bandwidth_scale=2.0, seed=seed)
+                     bandwidth_scale=2.0, seed=seed, activation=activation)
+
+    # ---------- Experiment 0: Step-Variance (1D) ----------
+    res0 = run_experiment(
+        generate_step_variance, oracle_step_variance,
+        name="Step-Variance (1D)", d=1,
+        n_train=3_000, n_cal=5_000, **common_1d,
+    )
+    plot_step_variance(res0, f"figures_cqr/step_variance_adaptivity{act_suffix}.pdf", show=show)
 
     # ---------- Experiment 1: Smooth Quadratic Heteroscedasticity (1D) ----------
     res1 = run_experiment(
@@ -612,7 +740,7 @@ def main():
         name="Smooth Quadratic Heteroscedasticity (1D)", d=1,
         n_train=3_000, n_cal=5_000, **common_1d,
     )
-    plot_smooth_hetero(res1, "figures_cqr/smooth_hetero_adaptivity.pdf", show=show)
+    plot_smooth_hetero(res1, f"figures_cqr/smooth_hetero_adaptivity{act_suffix}.pdf", show=show)
 
     # ---------- Experiment 2: Banana (2D) ----------
     res2 = run_experiment(
@@ -621,8 +749,9 @@ def main():
         n_train=5_000, n_cal=8_000,
         hidden_dim=64, epochs=200,
         alpha=alpha, lr=lr, bandwidth_scale=3.0, seed=seed,
+        activation=activation,
     )
-    plot_banana(res2, "figures_cqr/banana_adaptivity.pdf", show=show)
+    plot_banana(res2, f"figures_cqr/banana_adaptivity{act_suffix}.pdf", show=show)
 
     # ---------- Experiment 3: Mixture Clusters (1D) ----------
     res3 = run_experiment(
@@ -630,7 +759,7 @@ def main():
         name="Mixture Clusters (1D)", d=1,
         n_train=3_000, n_cal=5_000, **common_1d,
     )
-    plot_clusters(res3, "figures_cqr/clusters_adaptivity.pdf", show=show)
+    plot_clusters(res3, f"figures_cqr/clusters_adaptivity{act_suffix}.pdf", show=show)
 
     print("\n" + "=" * 60)
     print("All experiments completed — figures saved in figures_cqr/")

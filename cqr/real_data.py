@@ -166,13 +166,19 @@ def load_sgemm(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
 
 def load_rf1(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
-    RF1 river flow dataset from Mulan (train+test combined).
-    9125 samples, 64 features, 8 targets -> 1st used.
+    RF1 river flow dataset from Mulan (train split only).
+    ~5875 samples, 64 features, 8 targets -> 1st used by default.
+
+    Uses only the Mulan *train* split to avoid temporal distribution mismatch
+    (rf1 is time-series data — combining train+test and randomly re-splitting
+    creates heterogeneous splits that destabilise training).
+
+    Applies per-column IQR outlier removal on targets before caching.
     """
     import urllib.request, io
 
     cache_dir = _ensure_cache_dir()
-    cache_file = cache_dir / "rf1_combined.npz"
+    cache_file = cache_dir / "rf1_train_clean.npz"
 
     if cache_file.exists():
         loaded = np.load(cache_file, allow_pickle=False)
@@ -180,42 +186,61 @@ def load_rf1(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
     else:
         MULAN_BASE = "https://sourceforge.net/projects/mulan/files/datasets/multi-target%20regression%20datasets"
         n_targets = 8
-        dfs = []
-        for split in ["train", "test"]:
-            url = f"{MULAN_BASE}/rf1-{split}.arff/download"
-            print(f"  Downloading RF1 {split} set...")
-            req = urllib.request.urlopen(url)
-            raw = req.read().decode("utf-8")
-            # Parse ARFF manually: skip everything before @data
-            lines = raw.split("\n")
-            data_start = None
-            for i, line in enumerate(lines):
-                if line.strip().upper() == "@DATA":
-                    data_start = i + 1
-                    break
-            if data_start is None:
-                raise ValueError(f"Could not find @DATA section in RF1 {split} ARFF")
-            csv_text = "\n".join(lines[data_start:])
-            df_split = pd.read_csv(io.StringIO(csv_text), header=None)
-            dfs.append(df_split)
 
-        df = pd.concat(dfs, ignore_index=True)
+        url = f"{MULAN_BASE}/rf1-train.arff/download"
+        print(f"  Downloading RF1 train set...")
+        req = urllib.request.urlopen(url)
+        raw = req.read().decode("utf-8")
+        # Parse ARFF manually: skip everything before @data
+        lines = raw.split("\n")
+        data_start = None
+        for i, line in enumerate(lines):
+            if line.strip().upper() == "@DATA":
+                data_start = i + 1
+                break
+        if data_start is None:
+            raise ValueError("Could not find @DATA section in RF1 train ARFF")
+        csv_text = "\n".join(lines[data_start:])
+        df = pd.read_csv(io.StringIO(csv_text), header=None)
         df = df.apply(pd.to_numeric, errors="coerce")
 
         Y_all = df.iloc[:, -n_targets:].to_numpy(dtype=np.float32)
         X = df.iloc[:, :-n_targets].to_numpy(dtype=np.float32)
 
+        # --- Remove NaN / Inf ---
         valid = np.isfinite(X).all(axis=1) & np.isfinite(Y_all).all(axis=1)
         if not valid.all():
-            print(f"  [rf1] Removing {(~valid).sum()}/{len(X)} samples with NaN/Inf")
+            n_bad = int((~valid).sum())
+            print(f"  [rf1] Removing {n_bad}/{len(X)} samples with NaN/Inf")
             X, Y_all = X[valid], Y_all[valid]
 
+        # --- IQR outlier removal (per target column, 5×IQR) ---
+        iqr_factor = 5.0
+        outlier_mask = np.zeros(len(Y_all), dtype=bool)
+        print(f"  [rf1] Detecting outliers in {n_targets} target columns (IQR×{iqr_factor})...")
+        for col in range(Y_all.shape[1]):
+            yc = Y_all[:, col]
+            q1, q3 = np.percentile(yc, [25, 75])
+            iqr = q3 - q1
+            lo, hi = q1 - iqr_factor * iqr, q3 + iqr_factor * iqr
+            col_out = (yc < lo) | (yc > hi)
+            if col_out.any():
+                print(f"    target col {col}: {int(col_out.sum())} outliers "
+                      f"outside [{lo:.2f}, {hi:.2f}]")
+            outlier_mask |= col_out
+
+        if outlier_mask.any():
+            n_out = int(outlier_mask.sum())
+            print(f"  [rf1] Removing {n_out}/{len(X)} outlier rows")
+            X, Y_all = X[~outlier_mask], Y_all[~outlier_mask]
+
         np.savez(cache_file, X=X, Y=Y_all)
-        print(f"  RF1 cached: {X.shape[0]} samples, {X.shape[1]} features, {Y_all.shape[1]} targets")
+        print(f"  RF1 cached (train-only, clean): {X.shape[0]} samples, "
+              f"{X.shape[1]} features, {Y_all.shape[1]} targets")
 
     target_col = kwargs.get("target_col", 0)
     y = Y_all[:, target_col]
-    return X, y, _make_info("rf1", X, "River flow prediction (1st target)")
+    return X, y, _make_info("rf1", X, "River flow prediction (train split, 1st target)")
 
 
 def load_households(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
