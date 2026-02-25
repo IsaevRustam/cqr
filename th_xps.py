@@ -594,13 +594,16 @@ def plot_banana(res, output_path, show=True):
         else:
             ax.set_ylabel(r"$X_2$", fontsize=13)
 
-    cb = fig.colorbar(cf, ax=axes.tolist(), shrink=0.82, pad=0.02)
-    cb.set_label(r"Interval length $|\hat{\mathcal{C}}(x)|$", fontsize=12,
-                 rotation=270, labelpad=20)
-
     # fig.suptitle("Banana Data: Localized CQR tracks the oracle width along the arc", fontsize=15, y=1.02)
 
     plt.tight_layout()
+
+    # Add colorbar as a separate axis outside the figure panels
+    cb = fig.colorbar(cf, ax=axes.tolist(), shrink=0.82, pad=0.06,
+                      location="right", aspect=25)
+    cb.set_label(r"Interval length $|\hat{\mathcal{C}}(x)|$", fontsize=12,
+                 rotation=270, labelpad=22)
+
     plt.savefig(output_path, bbox_inches="tight", dpi=150)
     if show:
         plt.show()
