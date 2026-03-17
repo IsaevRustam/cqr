@@ -378,6 +378,7 @@ def run_experiment(
 
     res = dict(
         X_grid=X_grid, X_scatter=X_scatter, Y_scatter=Y_scatter, X_train=X_train,
+        pred_lo=pred_lo, pred_hi=pred_hi,
         int_lo_local=int_lo_local, int_hi_local=int_hi_local,
         int_lo_global=int_lo_global, int_hi_global=int_hi_global,
         oracle_lo=oracle_lo, oracle_hi=oracle_hi,
@@ -423,6 +424,10 @@ def plot_step_variance(res, output_path, show=True):
     ax.plot(xg, res["oracle_lo"], color="#1f77b4", ls=":", lw=2,
             label="Oracle", zorder=4)
     ax.plot(xg, res["oracle_hi"], color="#1f77b4", ls=":", lw=2, zorder=4)
+
+    ax.plot(xg, res["pred_lo"], color="#9467bd", ls="-.", lw=1.8,
+            label="Raw quantiles", zorder=5)
+    ax.plot(xg, res["pred_hi"], color="#9467bd", ls="-.", lw=1.8, zorder=5)
 
     ax.set_ylabel(r"$Y$", fontsize=14)
     ax.legend(loc="upper left", fontsize=11)
