@@ -2,11 +2,11 @@ alpha: 0.1
 seed: 42
 
 # Monte Carlo repetitions
-n_attempts: 10
+n_attempts: 5
 
 # Neural network settings
 hidden_dim: 128
-train_epochs: 500
+train_epochs: 100
 learning_rate: 0.001
 batch_size: 256
 weight_decay: 0.00001

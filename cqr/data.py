@@ -8,7 +8,7 @@ to ensure valid comparison across different X distributions.
 """
 
 import numpy as np
-from scipy.stats import truncnorm, norm
+from scipy.stats import truncnorm, norm, chi2 as chi2_dist, t as t_dist
 from typing import Tuple
 
 
@@ -595,5 +595,189 @@ def get_density_function(distribution: str, dist_params: dict = None):
                       weights=weights)
     else:
         raise ValueError(f"Unknown distribution: {distribution}")
+
+
+# =============================================================================
+# GUAN (2021) EXAMPLE 4.1  +  EXTENDED STRESS-TEST SETTINGS
+# =============================================================================
+
+_GUAN_SETTINGS = {
+    # ----- Original Guan (2021), Figure 2 -----
+    "A": {"rho": lambda x: np.sin(x),            "noise": "gaussian", "mu": None},
+    "B": {"rho": lambda x: np.cos(x),            "noise": "gaussian", "mu": None},
+    "C": {"rho": lambda x: np.sqrt(np.abs(x)),   "noise": "gaussian", "mu": None},
+    "D": {"rho": lambda x: np.ones_like(x),      "noise": "gaussian", "mu": None},
+    # ----- Smoothness / regularity stress -----
+    "E": {"rho": lambda x: np.abs(x),                            "noise": "gaussian", "mu": None},
+    "F": {"rho": lambda x: 1.0 + 0.5 * np.sign(x),              "noise": "gaussian", "mu": None},
+    "G": {"rho": lambda x: np.exp(x / 2),                        "noise": "gaussian", "mu": None},
+    # ----- Multi-scale / oscillation -----
+    "H": {"rho": lambda x: 1.0 + np.sin(2 * np.pi * x) ** 2,   "noise": "gaussian", "mu": None},
+    "I": {"rho": lambda x: 1.0 + 0.3 * np.sin(5 * x),           "noise": "gaussian", "mu": None},
+    # ----- Asymmetric / non-Gaussian conditional -----
+    "J": {"rho": lambda x: np.sqrt(np.abs(x)),  "noise": "chi2_centered", "mu": None},
+    "K": {
+        "rho": lambda x: np.sqrt(np.abs(x)),
+        "noise": "student_t_3",
+        "mu":   lambda x: np.sin(np.pi * x),
+    },
+    # ----- Mixture / regime switching (Guan intro example, rescaled to N(0,1)) -----
+    "L": {
+        "rho": lambda x: np.where(
+            np.abs(x) < 1.5,
+            np.abs(np.cos(x)) + 0.1,
+            np.ones_like(x),
+        ),
+        "noise": "gaussian",
+        "mu": None,
+    },
+}
+
+
+def guan2021_oracle(
+    setting: str,
+    x: np.ndarray,
+    alpha: float = 0.05,
+) -> tuple:
+    """Compute oracle prediction bands for a Guan (2021) setting on array x.
+
+    Dispatches over noise type:
+        gaussian      : Y = \u03bc(x) + \u03c1(x)\u00b7\u03b5,  \u03b5 ~ N(0,1)
+        chi2_centered : Y = \u03bc(x) + \u03c1(x)\u00b7(\u03c7\u00b2\u2081 \u2212 1)
+        student_t_3   : Y = \u03bc(x) + \u03c1(x)\u00b7t\u2083
+
+    Args:
+        setting: One of 'A'\u2013'L'.
+        x: Input array, shape (n,).
+        alpha: Miscoverage level (coverage = 1 \u2212 alpha).
+
+    Returns:
+        (oracle_lo, oracle_hi): Each of shape (n,).
+    """
+    setting = setting.upper()
+    if setting not in _GUAN_SETTINGS:
+        raise ValueError(
+            f"Unknown setting '{setting}'. Choose from {list(_GUAN_SETTINGS)}.")
+
+    cfg   = _GUAN_SETTINGS[setting]
+    rho_x = cfg["rho"](x)
+    mu_x  = cfg["mu"](x) if cfg["mu"] is not None else np.zeros_like(x, dtype=float)
+    noise = cfg["noise"]
+
+    if noise == "gaussian":
+        z = norm.ppf(1.0 - alpha / 2)
+        oracle_lo = mu_x - z * np.abs(rho_x)
+        oracle_hi = mu_x + z * np.abs(rho_x)
+    elif noise == "chi2_centered":
+        # Y = \u03c1(x)\u00b7(\u03c7\u00b2\u2081 \u2212 1);  \u03c1 \u2265 0 (sqrt(|x|))
+        q_lo = chi2_dist.ppf(alpha / 2,       1) - 1.0
+        q_hi = chi2_dist.ppf(1.0 - alpha / 2, 1) - 1.0
+        oracle_lo = mu_x + rho_x * q_lo
+        oracle_hi = mu_x + rho_x * q_hi
+    elif noise == "student_t_3":
+        # t\u2083 is symmetric;  \u03c1 \u2265 0 (sqrt(|x|))
+        qt = t_dist.ppf(1.0 - alpha / 2, df=3)
+        oracle_lo = mu_x - np.abs(rho_x) * qt
+        oracle_hi = mu_x + np.abs(rho_x) * qt
+    else:
+        raise ValueError(f"Unknown noise type '{noise}'.")
+
+    return oracle_lo, oracle_hi
+
+
+def generate_guan2021(
+    setting: str,
+    n_train: int = 1000,
+    n_cal: int = 1000,
+    n_test: int = 2000,
+    seed: int = 0,
+    alpha: float = 0.05,
+) -> dict:
+    """Generate synthetic data for Guan (2021) Example 4.1 and extended settings.
+
+    Model:
+        X ~ N(0, 1)
+        Y = \u03bc(X) + \u03c1(X) \u00b7 \u03b5,   \u03b5 \u22a5 X
+
+    Noise types by setting:
+        gaussian      (A\u2013I, L): \u03b5 ~ N(0, 1)
+        chi2_centered (J):      \u03b5 ~ \u03c7\u00b2\u2081 \u2212 1  (zero-mean, right-skewed)
+        student_t_3   (K):      \u03b5 ~ t\u2083        (symmetric, heavy-tailed)
+
+    Settings:
+        A: \u03c1(x) = sin(x)
+        B: \u03c1(x) = cos(x)
+        C: \u03c1(x) = sqrt(|x|)
+        D: \u03c1(x) = 1  (homoscedastic)
+        E: \u03c1(x) = |x|                          \u2014 kink at 0
+        F: \u03c1(x) = 1 + 0.5\u00b7sign(x)             \u2014 jump discontinuity
+        G: \u03c1(x) = exp(x/2)                     \u2014 exponential scale growth
+        H: \u03c1(x) = 1 + sin(2\u03c0x)\u00b2             \u2014 bounded oscillation
+        I: \u03c1(x) = 1 + 0.3\u00b7sin(5x)             \u2014 higher-frequency oscillation
+        J: \u03c1(x) = sqrt(|x|), \u03b5 ~ \u03c7\u00b2\u2081\u22121       \u2014 skewed conditional
+        K: \u03c1(x) = sqrt(|x|), \u03bc(x)=sin(\u03c0x), \u03b5 ~ t\u2083 \u2014 mean trend + heavy tails
+        L: \u03c1(x) = |cos(x)|+0.1 if |x|<1.5 else 1  \u2014 regime switch
+
+    Args:
+        setting: One of 'A'\u2013'L'.
+        n_train: Training set size.
+        n_cal: Calibration set size.
+        n_test: Test set size.
+        seed: RNG seed (single np.random.default_rng).
+        alpha: Miscoverage level; oracle bands at coverage 1\u2212alpha.
+
+    Returns:
+        dict with keys:
+            X_train, Y_train : shape (n_train,)
+            X_cal,   Y_cal   : shape (n_cal,)
+            X_test,  Y_test  : shape (n_test,)
+            oracle_lo, oracle_hi : oracle bands on X_test, shape (n_test,)
+    """
+    setting = setting.upper()
+    if setting not in _GUAN_SETTINGS:
+        raise ValueError(
+            f"Unknown setting '{setting}'. Choose from {list(_GUAN_SETTINGS)}.")
+
+    cfg   = _GUAN_SETTINGS[setting]
+    rho   = cfg["rho"]
+    mu_fn = cfg["mu"]
+    noise = cfg["noise"]
+
+    rng     = np.random.default_rng(seed)
+    n_total = n_train + n_cal + n_test
+
+    X_all  = rng.standard_normal(n_total)
+    mu_all = mu_fn(X_all) if mu_fn is not None else np.zeros(n_total)
+
+    if noise == "gaussian":
+        eps = rng.standard_normal(n_total)
+    elif noise == "chi2_centered":
+        eps = rng.chisquare(1, n_total) - 1.0
+    elif noise == "student_t_3":
+        eps = rng.standard_t(3, n_total)
+    else:
+        raise ValueError(f"Unknown noise type '{noise}'.")
+
+    Y_all = mu_all + rho(X_all) * eps
+
+    X_train = X_all[:n_train]
+    Y_train = Y_all[:n_train]
+    X_cal   = X_all[n_train : n_train + n_cal]
+    Y_cal   = Y_all[n_train : n_train + n_cal]
+    X_test  = X_all[n_train + n_cal :]
+    Y_test  = Y_all[n_train + n_cal :]
+
+    oracle_lo, oracle_hi = guan2021_oracle(setting, X_test, alpha)
+
+    return {
+        "X_train": X_train,
+        "Y_train": Y_train,
+        "X_cal":   X_cal,
+        "Y_cal":   Y_cal,
+        "X_test":  X_test,
+        "Y_test":  Y_test,
+        "oracle_lo": oracle_lo,
+        "oracle_hi": oracle_hi,
+    }
 
 

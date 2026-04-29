@@ -30,6 +30,8 @@ from .data import (
     compute_beta_density,
     compute_mixture_density,
     get_density_function,
+    generate_guan2021,
+    guan2021_oracle,
 )
 from .calibration import (
     compute_conformity_scores,

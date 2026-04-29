@@ -33,7 +33,6 @@ from cqr.calibration import (
     compute_conformity_scores,
     global_calibration,
     LocalConformalOptimizer,
-    compute_bandwidth,
 )
 from cqr.metrics import evaluate_intervals
 
@@ -47,9 +46,9 @@ def load_real_config(path: Optional[str]) -> Dict[str, Any]:
     defaults = {
         "alpha": 0.1,
         "seed": 42,
-        "n_attempts": 10,
+        "n_attempts": 5,
         "hidden_dim": 128,
-        "train_epochs": 500,
+        "train_epochs": 100,
         "learning_rate": 0.001,
         "batch_size": 256,
         "weight_decay": 1e-5,
@@ -76,6 +75,40 @@ def load_real_config(path: Optional[str]) -> Dict[str, Any]:
 # =============================================================================
 # SINGLE-RUN EVALUATION
 # =============================================================================
+
+def _compute_bandwidths(
+    X_cal: np.ndarray,
+    d: int,
+    bandwidth_scale: float = 1.0,
+) -> Dict[str, float]:
+    """
+    Compute three SotA kernel-regression bandwidths on the calibration set.
+
+    All rules follow  h = bandwidth_scale * rate(m, d) * sigma_eff, where
+    sigma_eff is the geometric mean of per-feature robust spread
+    min(std_j, IQR_j / 1.349), keeping h << 1 on standardized features.
+
+    Rules
+    -----
+    silverman : (4/(d+2))^{1/(d+4)} * m^{-1/(d+4)} * sigma_eff   (Silverman 1986)
+    scott     : m^{-1/(d+4)}         * sigma_eff                   (Scott 1992)
+    isj       : m^{-1/(d+4)}         * sigma_eff / sqrt(d)         (dim-penalized rate, Botev 2010)
+    """
+    m = len(X_cal)
+    stds = np.std(X_cal, axis=0, ddof=1)
+    iqrs = (np.percentile(X_cal, 75, axis=0) - np.percentile(X_cal, 25, axis=0)) / 1.349
+    spreads = np.maximum(np.minimum(stds, iqrs), 1e-8)
+    sigma_eff = float(np.exp(np.mean(np.log(spreads))))
+
+    rate_scott = m ** (-1.0 / (d + 4))
+    rate_silverman = ((4.0 / (d + 2)) ** (1.0 / (d + 4))) * rate_scott
+
+    return {
+        "silverman": max(bandwidth_scale * rate_silverman * sigma_eff, 1e-6),
+        "scott":     max(bandwidth_scale * rate_scott     * sigma_eff, 1e-6),
+        "isj":       max(bandwidth_scale * rate_scott     * sigma_eff / np.sqrt(d), 1e-6),
+    }
+
 
 def evaluate_single_run(
     X: np.ndarray,
@@ -166,62 +199,55 @@ def evaluate_single_run(
     )
 
     # =========================================================================
-    # LOCALIZED CQR
+    # LOCALIZED CQR — three SotA bandwidths (Silverman, Scott, ISJ)
     # =========================================================================
     m = data["n_cal"]
+    d = data["X_cal"].shape[1]
+    bandwidths = _compute_bandwidths(data["X_cal"], d, cfg["bandwidth_scale"])
 
-    # Compute bandwidth using Silverman's rule of thumb scaled by the
-    # actual data spread (median pairwise distance).  This adapts to both
-    # dimensionality d and calibration size m, avoiding the one-size-fits-all
-    # pitfall of a fixed fraction of median_dist.
-    #   h_silverman = (4/(d+2))^{1/(d+4)} * m^{-1/(d+4)}   (rate for density)
-    #   h = bandwidth_scale * h_silverman * median_dist      (data scale)
-    from sklearn.metrics import pairwise_distances as _pw_dist
-    d = data["X_train"].shape[1]
-    n_sub = min(m, 2000)
-    rng_bw = np.random.RandomState(seed)
-    idx_sub = rng_bw.choice(m, n_sub, replace=False) if m > n_sub else np.arange(m)
-    D_sub = _pw_dist(data["X_cal"][idx_sub])
-    median_dist = float(np.median(D_sub[np.triu_indices(n_sub, k=1)]))
-    h_silverman = ((4.0 / (d + 2)) ** (1.0 / (d + 4))) * (m ** (-1.0 / (d + 4)))
-    h = cfg["bandwidth_scale"] * h_silverman * median_dist
-    h = max(h, 1e-6)
+    def _run_local(h_val):
+        lcp = LocalConformalOptimizer(data["X_cal"], scores, h=h_val)
+        parts = []
+        for start in range(0, len(data["X_test"]), 1000):
+            end = min(start + 1000, len(data["X_test"]))
+            parts.append(lcp.predict_corrections(data["X_test"][start:end], alpha))
+        Q_hat = np.concatenate(parts)
+        return evaluate_intervals(
+            data["Y_test"],
+            pred_test_lo - Q_hat,
+            pred_test_hi + Q_hat,
+            data["X_test"],
+            alpha=alpha, n_bins=cfg["n_cond_bins"],
+        )
 
-    lcp = LocalConformalOptimizer(data["X_cal"], scores, h=h)
-
-    # Predict corrections in batches to manage memory
-    batch_size_pred = 1000
-    Q_hat_local_parts = []
-    for start in range(0, len(data["X_test"]), batch_size_pred):
-        end = min(start + batch_size_pred, len(data["X_test"]))
-        X_batch = data["X_test"][start:end]
-        q_part = lcp.predict_corrections(X_batch, alpha)
-        Q_hat_local_parts.append(q_part)
-    Q_hat_local = np.concatenate(Q_hat_local_parts)
-
-    local_lo = pred_test_lo - Q_hat_local
-    local_hi = pred_test_hi + Q_hat_local
-
-    local_metrics = evaluate_intervals(
-        data["Y_test"], local_lo, local_hi, data["X_test"],
-        alpha=alpha, n_bins=cfg["n_cond_bins"],
-    )
+    local_silverman_metrics = _run_local(bandwidths["silverman"])
+    local_scott_metrics     = _run_local(bandwidths["scott"])
+    local_isj_metrics       = _run_local(bandwidths["isj"])
 
     # Convert widths to original scale if target was standardized
     scaler_y = data["scaler_y"]
-    if scaler_y is not None:
-        for m_dict in [global_metrics, local_metrics]:
+    all_metric_dicts = [
+        global_metrics,
+        local_silverman_metrics,
+        local_scott_metrics,
+        local_isj_metrics,
+    ]
+    for m_dict in all_metric_dicts:
+        if scaler_y is not None:
             m_dict["avg_width_orig"] = inverse_transform_width(m_dict["avg_width"], scaler_y)
             m_dict["median_width_orig"] = inverse_transform_width(m_dict["median_width"], scaler_y)
-    else:
-        for m_dict in [global_metrics, local_metrics]:
+        else:
             m_dict["avg_width_orig"] = m_dict["avg_width"]
             m_dict["median_width_orig"] = m_dict["median_width"]
 
     return {
         "global": global_metrics,
-        "local": local_metrics,
-        "h": h,
+        "local_silverman": local_silverman_metrics,
+        "local_scott": local_scott_metrics,
+        "local_isj": local_isj_metrics,
+        "h_silverman": bandwidths["silverman"],
+        "h_scott": bandwidths["scott"],
+        "h_isj": bandwidths["isj"],
         "Q_hat_global": Q_hat_global,
     }
 
@@ -272,14 +298,15 @@ def run_dataset_evaluation(
             results.append(res)
             if verbose:
                 g = res["global"]
-                l = res["local"]
+                ls = res["local_silverman"]
+                lsc = res["local_scott"]
+                li = res["local_isj"]
                 print(
                     f"  Run {attempt+1}/{n_attempts}: "
-                    f"Global cov={g['coverage']:.3f} w={g['avg_width']:.3f} "
-                    f"worst={g['worst_bin_cov']:.3f} | "
-                    f"Local cov={l['coverage']:.3f} w={l['avg_width']:.3f} "
-                    f"worst={l['worst_bin_cov']:.3f} "
-                    f"(h={res['h']:.3f})"
+                    f"Global cov={g['coverage']:.3f} w={g['avg_width']:.3f} | "
+                    f"Silverman(h={res['h_silverman']:.3f}) cov={ls['coverage']:.3f} w={ls['avg_width']:.3f} | "
+                    f"Scott(h={res['h_scott']:.3f}) cov={lsc['coverage']:.3f} w={lsc['avg_width']:.3f} | "
+                    f"ISJ(h={res['h_isj']:.3f}) cov={li['coverage']:.3f} w={li['avg_width']:.3f}"
                 )
         except Exception as e:
             print(f"  Run {attempt+1}/{n_attempts}: FAILED — {e}")
@@ -287,6 +314,7 @@ def run_dataset_evaluation(
     # Print summary after all runs for this dataset
     if verbose and len(results) > 0:
         from scipy import stats as _stats
+        from collections import defaultdict
         alpha = cfg["alpha"]
         n_runs = len(results)
         # 95% CI half-width: t_{0.025, n-1} * std / sqrt(n)
@@ -298,8 +326,13 @@ def run_dataset_evaluation(
             return m, hw
 
         print(f"\n  --- Summary for {name} ({n_runs}/{n_attempts} successful runs, 95% CI) ---")
-        print(f"  {'':18s} {'Coverage':>16s} {'Avg Width':>16s} {'Worst-Bin':>16s}")
-        for method_key, method_label in [("global", "Global CQR"), ("local", "Local CQR")]:
+        print(f"  {'':28s} {'Coverage':>16s} {'Avg Width':>16s} {'Worst-Bin':>16s}")
+        for method_key, method_label in [
+            ("global",          "Global CQR          "),
+            ("local_silverman", "Local (Silverman)    "),
+            ("local_scott",     "Local (Scott)        "),
+            ("local_isj",       "Local (ISJ)          "),
+        ]:
             covs = [r[method_key]["coverage"] for r in results]
             widths = [r[method_key]["avg_width"] for r in results]
             worst = [r[method_key]["worst_bin_cov"] for r in results]
@@ -307,24 +340,31 @@ def run_dataset_evaluation(
             w_m, w_h = ci(widths)
             wb_m, wb_h = ci(worst)
             print(
-                f"  {method_label:18s} "
+                f"  {method_label:28s} "
                 f"{c_m:.3f}±{c_h:.3f}  "
                 f"{w_m:.3f}±{w_h:.3f}  "
                 f"{wb_m:.3f}±{wb_h:.3f}"
             )
-        # Width comparison
+        # Width comparison vs Global
         g_w = np.mean([r["global"]["avg_width"] for r in results])
-        l_w = np.mean([r["local"]["avg_width"] for r in results])
-        diff_pct = (l_w - g_w) / g_w * 100
-        sym = "narrower" if diff_pct < 0 else "wider"
-        print(f"  Local is {abs(diff_pct):.1f}% {sym} than Global (target cov={1-alpha:.0%})")
+        for method_key, rule in [
+            ("local_silverman", "Silverman"),
+            ("local_scott",     "Scott    "),
+            ("local_isj",       "ISJ      "),
+        ]:
+            l_w = np.mean([r[method_key]["avg_width"] for r in results])
+            diff_pct = (l_w - g_w) / g_w * 100
+            sym = "narrower" if diff_pct < 0 else "wider"
+            print(f"  Local ({rule}) is {abs(diff_pct):.1f}% {sym} than Global (target cov={1-alpha:.0%})")
 
-        # Per-bin breakdown (averaged across runs, ranked by difficulty)
-        from collections import defaultdict
-        for method_key, method_label in [("global", "Global CQR"), ("local", "Local CQR")]:
-            # Collect ranked_bins from all runs
+        # Per-bin breakdown for all methods
+        for method_key, method_label in [
+            ("global",          "Global CQR"),
+            ("local_silverman", "Local (Silverman)"),
+            ("local_scott",     "Local (Scott)"),
+            ("local_isj",       "Local (ISJ)"),
+        ]:
             all_ranked = [r[method_key]["ranked_bins"] for r in results]
-            # Aggregate per bin_id across runs
             bin_agg = defaultdict(lambda: {"coverages": [], "avg_widths": [], "counts": []})
             for run_ranked in all_ranked:
                 for entry in run_ranked:
@@ -336,7 +376,6 @@ def run_dataset_evaluation(
             if len(bin_agg) == 0:
                 continue
 
-            # Build summary per bin, sort by mean coverage ascending
             bin_summaries = []
             for bid, agg in bin_agg.items():
                 bin_summaries.append({
@@ -348,7 +387,7 @@ def run_dataset_evaluation(
                 })
             bin_summaries.sort(key=lambda d: d["mean_cov"])
 
-            print(f"\n  {method_label} — Bins ranked by difficulty (hardest \u2192 easiest):")
+            print(f"\n  {method_label} -- Bins ranked by difficulty (hardest -> easiest):")
             print(f"  {'Rank':>4s}  {'Bin':>3s}  {'Count':>6s}  {'Coverage':>12s}  {'Avg Width':>10s}")
             for rank, bs in enumerate(bin_summaries, 1):
                 print(
@@ -381,7 +420,12 @@ def aggregate_results(
         return []
 
     rows = []
-    for method_key, method_label in [("global", "Global CQR"), ("local", "Localized CQR")]:
+    for method_key, method_label in [
+        ("global",          "Global CQR"),
+        ("local_silverman", "Local CQR (Silverman)"),
+        ("local_scott",     "Local CQR (Scott)"),
+        ("local_isj",       "Local CQR (ISJ)"),
+    ]:
         coverages = [r[method_key]["coverage"] for r in runs]
         avg_widths = [r[method_key]["avg_width"] for r in runs]
         median_widths = [r[method_key]["median_width"] for r in runs]
@@ -500,7 +544,7 @@ def print_results_table(df: pd.DataFrame) -> None:
         display[c] = display[c].map(lambda x: f"{x:.3f}" if isinstance(x, float) else x)
 
     print("\n" + "=" * 150)
-    print("RESULTS: Global CQR vs Localized CQR — Overall Summary")
+    print("RESULTS: Global CQR vs Localized CQR (3 bandwidths) -- Overall Summary")
     print("=" * 150)
     print(display.to_string(index=False))
     print("=" * 150)
@@ -509,22 +553,26 @@ def print_results_table(df: pd.DataFrame) -> None:
     print("\n--- SUMMARY ---")
     for dataset in display_df["Dataset"].unique():
         sub = display_df[display_df["Dataset"] == dataset]
-        if len(sub) < 2:
+        g_row = sub[sub["Method"] == "Global CQR"]
+        if g_row.empty:
             continue
-        g = sub[sub["Method"] == "Global CQR"].iloc[0]
-        l = sub[sub["Method"] == "Localized CQR"].iloc[0]
-
-        width_diff = ((l["Avg Width (mean)"] - g["Avg Width (mean)"]) / g["Avg Width (mean)"]) * 100
-
-        symbol = "↓" if width_diff < 0 else "↑"
-        print(
-            f"  {dataset:20s}: "
-            f"Local width {symbol} {abs(width_diff):5.1f}% vs Global"
-        )
+        g = g_row.iloc[0]
+        for local_label in ["Local CQR (Silverman)", "Local CQR (Scott)", "Local CQR (ISJ)"]:
+            l_row = sub[sub["Method"] == local_label]
+            if l_row.empty:
+                continue
+            l = l_row.iloc[0]
+            width_diff = ((l["Avg Width (mean)"] - g["Avg Width (mean)"]) / g["Avg Width (mean)"]) * 100
+            symbol = "-" if width_diff < 0 else "+"
+            rule = local_label.split("(")[1].rstrip(")")
+            print(
+                f"  {dataset:20s} {rule:10s}: "
+                f"Local width {symbol} {abs(width_diff):5.1f}% vs Global"
+            )
 
     print("\n--- PER-BIN BREAKDOWN ---")
     print("Detailed per-bin results are included in the full CSV output.")
-    print("Each dataset has bin-level rows ranked by difficulty (hardest → easiest).")
+    print("Each dataset has bin-level rows ranked by difficulty (hardest -> easiest).")
     print()
 
 
@@ -572,7 +620,7 @@ def main():
     datasets = args.datasets if args.datasets else DEFAULT_DATASETS
 
     print("=" * 70)
-    print("Global CQR vs Localized CQR — Real Data Evaluation")
+    print("Global CQR vs Localized CQR -- Real Data Evaluation")
     print("=" * 70)
     print(f"Model: {activation.upper()} NN (hidden={cfg['hidden_dim']}, layers={cfg['n_layers']}, "
           f"epochs={cfg['train_epochs']}, lr={cfg['learning_rate']})")
