@@ -20,11 +20,13 @@ Usage:
 
 import argparse
 import time
+import traceback
 import numpy as np
 import pandas as pd
 import torch
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from sklearn.decomposition import PCA
 
 from cqr.real_data import load_dataset, DEFAULT_DATASETS, list_datasets
 from cqr.preprocessing import prepare_data, inverse_transform_width
@@ -57,6 +59,8 @@ def load_real_config(path: Optional[str]) -> Dict[str, Any]:
         "n_cond_bins": 5,
         "activation": "requ",
         "clip_outliers_iqr": None,       # IQR factor for y-outlier removal
+        "kernel_space": "yhat",            # 'yhat' | 'pca' | 'x'
+        "pca_components": 3,               # number of PCA components (used when kernel_space='pca')
         # Per-dataset overrides: key = dataset name, value = dict of overrides
         "dataset_overrides": {
             # rf1: 64 features, ~8757 samples → 128-unit NN overfits badly
@@ -82,10 +86,13 @@ def _compute_bandwidths(
     bandwidth_scale: float = 1.0,
 ) -> Dict[str, float]:
     """
-    Compute three SotA kernel-regression bandwidths on the training set.
+    Compute three SotA kernel-regression bandwidths on 1D predicted values.
 
-    Using training data (not calibration) to estimate h avoids any
-    dependency between bandwidth selection and conformal calibration.
+    Using the predicted value ŷ = (q̂_lo + q̂_hi)/2 from the training set
+    as the 1D reference avoids the curse of dimensionality (kernel is always
+    applied in 1D space regardless of the original feature dimension d).
+    Using training data (not calibration) keeps h independent of conformal
+    calibration.
 
     All rules follow  h = bandwidth_scale * rate(m, d) * sigma_eff, where
     sigma_eff is the geometric mean of per-feature robust spread
@@ -111,6 +118,50 @@ def _compute_bandwidths(
         "scott":     max(bandwidth_scale * rate_scott     * sigma_eff, 1e-6),
         "isj":       max(bandwidth_scale * rate_scott     * sigma_eff / np.sqrt(d), 1e-6),
     }
+
+
+def _build_kernel_features(
+    X_train: np.ndarray,
+    X_cal: np.ndarray,
+    X_test: np.ndarray,
+    pred_train_lo: np.ndarray,
+    pred_train_hi: np.ndarray,
+    pred_cal_lo: np.ndarray,
+    pred_cal_hi: np.ndarray,
+    pred_test_lo: np.ndarray,
+    pred_test_hi: np.ndarray,
+    kernel_space: str,
+    pca_components: int,
+):
+    """
+    Build 1D or low-d kernel features for LocalConformalOptimizer.
+
+    kernel_space options:
+      'yhat' : 1D midpoint of predicted interval (q̂_lo + q̂_hi) / 2
+      'pca'  : top-k PCA components of X, fitted on X_train
+      'x'    : raw X (no dimensionality reduction)
+
+    Returns (feat_train, feat_cal, feat_test, kernel_d).
+    """
+    if kernel_space == "yhat":
+        feat_train = ((pred_train_lo + pred_train_hi) / 2).reshape(-1, 1)
+        feat_cal   = ((pred_cal_lo   + pred_cal_hi)   / 2).reshape(-1, 1)
+        feat_test  = ((pred_test_lo  + pred_test_hi)  / 2).reshape(-1, 1)
+        kernel_d   = 1
+    elif kernel_space == "pca":
+        k = min(pca_components, X_train.shape[1])
+        pca = PCA(n_components=k, random_state=0)
+        pca.fit(X_train)
+        feat_train = pca.transform(X_train)
+        feat_cal   = pca.transform(X_cal)
+        feat_test  = pca.transform(X_test)
+        kernel_d   = k
+    else:  # 'x'
+        feat_train = X_train
+        feat_cal   = X_cal
+        feat_test  = X_test
+        kernel_d   = X_train.shape[1]
+    return feat_train, feat_cal, feat_test, kernel_d
 
 
 def evaluate_single_run(
@@ -204,17 +255,32 @@ def evaluate_single_run(
     # =========================================================================
     # LOCALIZED CQR — three SotA bandwidths (Silverman, Scott, ISJ)
     # =========================================================================
-    # h is estimated from the training set to avoid any dependency with the
-    # conformal calibration step (which uses X_cal independently).
-    d = data["X_cal"].shape[1]
-    bandwidths = _compute_bandwidths(data["X_train"], d, cfg["bandwidth_scale"])
+    # Build kernel features (yhat / pca / x) — fitted on train set only.
+    kernel_space = str(cfg.get("kernel_space", "yhat"))
+    pca_components = int(cfg.get("pca_components", 3))
+
+    with torch.no_grad():
+        X_train_t = torch.from_numpy(data["X_train"])
+        pred_train_lo = model_lo(X_train_t).numpy().flatten()
+        pred_train_hi = model_hi(X_train_t).numpy().flatten()
+
+    feat_train, feat_cal, feat_test, kernel_d = _build_kernel_features(
+        data["X_train"], data["X_cal"], data["X_test"],
+        pred_train_lo, pred_train_hi,
+        pred_cal_lo, pred_cal_hi,
+        pred_test_lo, pred_test_hi,
+        kernel_space=kernel_space,
+        pca_components=pca_components,
+    )
+
+    bandwidths = _compute_bandwidths(feat_train, d=int(kernel_d), bandwidth_scale=float(cfg["bandwidth_scale"]))
 
     def _run_local(h_val):
-        lcp = LocalConformalOptimizer(data["X_cal"], scores, h=h_val)
+        lcp = LocalConformalOptimizer(feat_cal, scores, h=h_val)
         parts = []
-        for start in range(0, len(data["X_test"]), 1000):
-            end = min(start + 1000, len(data["X_test"]))
-            parts.append(lcp.predict_corrections(data["X_test"][start:end], alpha))
+        for start in range(0, len(feat_test), 1000):
+            end = min(start + 1000, len(feat_test))
+            parts.append(lcp.predict_corrections(feat_test[start:end], alpha))
         Q_hat = np.concatenate(parts)
         return evaluate_intervals(
             data["Y_test"],
@@ -314,6 +380,7 @@ def run_dataset_evaluation(
                 )
         except Exception as e:
             print(f"  Run {attempt+1}/{n_attempts}: FAILED — {e}")
+            traceback.print_exc()
 
     # Print summary after all runs for this dataset
     if verbose and len(results) > 0:
@@ -601,6 +668,11 @@ def main():
     parser.add_argument("--train_epochs", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--bandwidth_scale", type=float, default=None)
+    parser.add_argument("--kernel_space", type=str, default=None,
+                        choices=["yhat", "pca", "x"],
+                        help="Kernel feature space: yhat (1D predicted midpoint), pca (top-k PCA of X), x (raw X)")
+    parser.add_argument("--pca_components", type=int, default=None,
+                        help="Number of PCA components when --kernel_space pca (default: from config)")
     parser.add_argument("--activation", type=str, default=None,
                         choices=["relu", "requ"],
                         help="Activation function (default: from config, fallback requ)")
@@ -613,13 +685,23 @@ def main():
     cfg = load_real_config(config_path)
 
     # Apply CLI overrides
-    for key in ["alpha", "n_attempts", "hidden_dim", "train_epochs", "batch_size", "bandwidth_scale", "activation"]:
+    for key in ["alpha", "n_attempts", "hidden_dim", "train_epochs", "batch_size", "bandwidth_scale", "activation", "kernel_space", "pca_components"]:
         val = getattr(args, key, None)
         if val is not None:
             cfg[key] = val
 
     activation = cfg.get("activation", "requ")
-    output_path = args.output if args.output else f"results_real_data_{activation}.csv"
+    if args.output:
+        output_path = args.output
+    else:
+        _ks = cfg.get("kernel_space", "yhat")
+        if _ks == "pca":
+            _kernel_suffix = f"PCA{int(cfg.get('pca_components', 3))}"
+        elif _ks == "yhat":
+            _kernel_suffix = "qdiff"
+        else:
+            _kernel_suffix = "whole"
+        output_path = f"results_real_data_{activation}_{_kernel_suffix}.csv"
 
     datasets = args.datasets if args.datasets else DEFAULT_DATASETS
 
@@ -632,6 +714,9 @@ def main():
     print(f"Repetitions: {cfg['n_attempts']}")
     print(f"Datasets: {', '.join(datasets)}")
     print(f"Bandwidth scale: {cfg['bandwidth_scale']}")
+    print(f"Kernel space: {cfg.get('kernel_space', 'yhat')}" +
+          (f" (k={cfg.get('pca_components', 3)})"
+           if cfg.get('kernel_space') == 'pca' else ""))
     print("-" * 70)
 
     all_rows = []

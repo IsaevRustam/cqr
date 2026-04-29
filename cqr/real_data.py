@@ -393,6 +393,70 @@ def load_house(cache_dir: Path = _CACHE_DIR, **kwargs) -> Tuple[np.ndarray, np.n
     return load_california_housing(**kwargs)
 
 
+# =============================================================================
+# LOW-DIMENSIONAL BENCHMARK DATASETS
+# =============================================================================
+
+
+def load_kin8nm(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """
+    Kin8nm robot arm kinematics dataset (8192 samples, 8 features).
+    Predicts the distance of the end-effector from a target.
+    """
+    return _load_openml(
+        data_id=189, name="kin8nm",
+        description="Robot arm kinematics prediction",
+    )
+
+
+def load_airfoil(cache_dir: Path = _CACHE_DIR, **kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """
+    NASA Airfoil Self-Noise dataset (1503 samples, 5 features).
+    Predicts scaled sound pressure level from aerodynamic and geometric properties.
+    """
+    cache_dir = _ensure_cache_dir(cache_dir)
+    url = "https://archive.ics.uci.edu/ml/machine-learning-databases/00291/airfoil_self_noise.dat"
+    filepath = cache_dir / "airfoil_self_noise.dat"
+    _download_file(url, filepath)
+    df = pd.read_csv(filepath, sep="\t", header=None)
+    X = df.iloc[:, :-1].values
+    y = df.iloc[:, -1].values
+    X, y = _to_float32(X, y)
+    return X, y, _make_info("airfoil", X, "Airfoil self-noise sound pressure prediction")
+
+
+def load_wine_quality(cache_dir: Path = _CACHE_DIR, **kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """
+    Wine Quality dataset — red wine (1599 samples, 11 features).
+    Predicts wine quality score from physicochemical properties.
+    """
+    cache_dir = _ensure_cache_dir(cache_dir)
+    url = "https://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv"
+    filepath = cache_dir / "winequality-red.csv"
+    _download_file(url, filepath)
+    df = pd.read_csv(filepath, sep=";")
+    X = df.iloc[:, :-1].values
+    y = df.iloc[:, -1].values
+    X, y = _to_float32(X, y)
+    return X, y, _make_info("wine_quality", X, "Red wine quality score prediction")
+
+
+def load_yacht(cache_dir: Path = _CACHE_DIR, **kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """
+    Yacht Hydrodynamics dataset (308 samples, 6 features).
+    Predicts residuary resistance of sailing yachts.
+    """
+    cache_dir = _ensure_cache_dir(cache_dir)
+    url = "https://archive.ics.uci.edu/ml/machine-learning-databases/00243/yacht_hydrodynamics.data"
+    filepath = cache_dir / "yacht_hydrodynamics.data"
+    _download_file(url, filepath)
+    df = pd.read_csv(filepath, sep=r"\s+", header=None).dropna()
+    X = df.iloc[:, :-1].values
+    y = df.iloc[:, -1].values
+    X, y = _to_float32(X, y)
+    return X, y, _make_info("yacht", X, "Yacht hydrodynamics residuary resistance")
+
+
 def load_meps(year: int, cache_dir: Path = _CACHE_DIR, **kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     MEPS (Medical Expenditure Panel Survey) dataset.
@@ -484,6 +548,11 @@ DATASET_REGISTRY: Dict[str, Callable] = {
     "rf2": load_rf2,
     "sgemm": load_sgemm,
     "households": load_households,
+    # Low-dimensional benchmarks
+    "kin8nm":       load_kin8nm,
+    "airfoil":      load_airfoil,
+    "wine_quality": load_wine_quality,
+    "yacht":        load_yacht,
     # CSV / CQR paper
     "meps_19": load_meps_19,
     "meps_20": load_meps_20,
@@ -502,17 +571,21 @@ DATASET_REGISTRY: Dict[str, Callable] = {
 
 # A curated subset that are fast and reliably loadable
 DEFAULT_DATASETS = [
-    # "diabetes",
-    "california_housing",
-    "concrete",
-    # "energy",
-    "bio",
-    "community",
-    "blog_data",
+    "diabetes",           # d=10,  n=442
+    "california_housing", # d=8,   n=20640
+    "concrete",           # d=8,   n=1030
+    "energy",             # d=8,   n=768
+    "bio",                # d=9,   n=45730
+    "community",          # d~100, n=1994
+    "blog_data",          # d=280, n=52397
     "rf1",
     "rf2",
     "scm1d",
     "scm20d",
+    # Low-dimensional benchmarks
+    "kin8nm",             # d=8,  n=8192
+    "airfoil",            # d=5,  n=1503
+    "wine_quality",       # d=11, n=1599
 ]
 
 
