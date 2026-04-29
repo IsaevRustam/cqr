@@ -52,7 +52,7 @@ def run_setting(
     hidden_dim: int = 64,
     epochs: int = 300,
     lr: float = 0.01,
-    bandwidth_scale: float = 0.8,
+    bandwidth_scale: float = 1.0,
     gamma: float = 1.0,
     n_grid: int = 500,
     verbose: bool = True,
@@ -181,6 +181,11 @@ SETTING_LABELS = {
     "K": r"$\mu{=}\sin(\pi x),\;\rho{=}\sqrt{|x|},\;\varepsilon{\sim}t_3$",
     # Mixture / regime switching
     "L": r"$\rho{=}|\cos x|{+}0.1\;(|x|{<}1.5),\;\text{else }1$",
+    # A-like variants: oscillatory bands that collapse to zero
+    "M": r"$\rho(x) = \sin^2(x)$",
+    "N": r"$\rho(x) = |\sin(2x)|$",
+    # C-like variant: sharper cusp at 0
+    "O": r"$\rho(x) = |x|^{2/3}$",
 }
 
 _COLOR_LOCAL  = "#2ca02c"
@@ -299,7 +304,7 @@ def main():
         description="Reproduce Guan (2021) Figure 2 with Local vs Global CQR"
     )
     parser.add_argument("--settings", nargs="+", default=["A", "B", "C", "D"],
-                        choices=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"],
+                        choices=["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O"],
                         help="Which settings to run (default: original A\u2013D)")
     parser.add_argument("--n_train", type=int, default=1000)
     parser.add_argument("--n_cal",   type=int, default=1000)
@@ -307,7 +312,7 @@ def main():
     parser.add_argument("--alpha",   type=float, default=0.05)
     parser.add_argument("--epochs",  type=int, default=300)
     parser.add_argument("--hidden_dim", type=int, default=64)
-    parser.add_argument("--bandwidth_scale", type=float, default=0.8)
+    parser.add_argument("--bandwidth_scale", type=float, default=1.5)
     parser.add_argument("--seed",    type=int, default=0)
     parser.add_argument("--output",  type=str, default=None,
                         help="Output PDF/PNG path (default: figures_cqr/guan2021_fig2.pdf)")

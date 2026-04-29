@@ -631,6 +631,11 @@ _GUAN_SETTINGS = {
         "noise": "gaussian",
         "mu": None,
     },
+    # ----- A-like variants: oscillatory bands that collapse to zero -----
+    "M": {"rho": lambda x: np.sin(x) ** 2,        "noise": "gaussian", "mu": None},
+    "N": {"rho": lambda x: np.abs(np.sin(2 * x)), "noise": "gaussian", "mu": None},
+    # ----- C-like variant: sharper cusp at 0 -----
+    "O": {"rho": lambda x: np.abs(x) ** (2 / 3),  "noise": "gaussian", "mu": None},
 }
 
 

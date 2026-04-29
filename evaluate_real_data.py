@@ -77,12 +77,15 @@ def load_real_config(path: Optional[str]) -> Dict[str, Any]:
 # =============================================================================
 
 def _compute_bandwidths(
-    X_cal: np.ndarray,
+    X_ref: np.ndarray,
     d: int,
     bandwidth_scale: float = 1.0,
 ) -> Dict[str, float]:
     """
-    Compute three SotA kernel-regression bandwidths on the calibration set.
+    Compute three SotA kernel-regression bandwidths on the training set.
+
+    Using training data (not calibration) to estimate h avoids any
+    dependency between bandwidth selection and conformal calibration.
 
     All rules follow  h = bandwidth_scale * rate(m, d) * sigma_eff, where
     sigma_eff is the geometric mean of per-feature robust spread
@@ -94,9 +97,9 @@ def _compute_bandwidths(
     scott     : m^{-1/(d+4)}         * sigma_eff                   (Scott 1992)
     isj       : m^{-1/(d+4)}         * sigma_eff / sqrt(d)         (dim-penalized rate, Botev 2010)
     """
-    m = len(X_cal)
-    stds = np.std(X_cal, axis=0, ddof=1)
-    iqrs = (np.percentile(X_cal, 75, axis=0) - np.percentile(X_cal, 25, axis=0)) / 1.349
+    m = len(X_ref)
+    stds = np.std(X_ref, axis=0, ddof=1)
+    iqrs = (np.percentile(X_ref, 75, axis=0) - np.percentile(X_ref, 25, axis=0)) / 1.349
     spreads = np.maximum(np.minimum(stds, iqrs), 1e-8)
     sigma_eff = float(np.exp(np.mean(np.log(spreads))))
 
@@ -201,9 +204,10 @@ def evaluate_single_run(
     # =========================================================================
     # LOCALIZED CQR — three SotA bandwidths (Silverman, Scott, ISJ)
     # =========================================================================
-    m = data["n_cal"]
+    # h is estimated from the training set to avoid any dependency with the
+    # conformal calibration step (which uses X_cal independently).
     d = data["X_cal"].shape[1]
-    bandwidths = _compute_bandwidths(data["X_cal"], d, cfg["bandwidth_scale"])
+    bandwidths = _compute_bandwidths(data["X_train"], d, cfg["bandwidth_scale"])
 
     def _run_local(h_val):
         lcp = LocalConformalOptimizer(data["X_cal"], scores, h=h_val)
@@ -303,10 +307,10 @@ def run_dataset_evaluation(
                 li = res["local_isj"]
                 print(
                     f"  Run {attempt+1}/{n_attempts}: "
-                    f"Global cov={g['coverage']:.3f} w={g['avg_width']:.3f} | "
-                    f"Silverman(h={res['h_silverman']:.3f}) cov={ls['coverage']:.3f} w={ls['avg_width']:.3f} | "
-                    f"Scott(h={res['h_scott']:.3f}) cov={lsc['coverage']:.3f} w={lsc['avg_width']:.3f} | "
-                    f"ISJ(h={res['h_isj']:.3f}) cov={li['coverage']:.3f} w={li['avg_width']:.3f}"
+                    f"Global cov={g['coverage']:.3f} wgc={g['worst_bin_cov']:.3f} w={g['avg_width']:.3f} | "
+                    f"Silverman(h={res['h_silverman']:.3f}) cov={ls['coverage']:.3f} wgc={ls['worst_bin_cov']:.3f} w={ls['avg_width']:.3f} | "
+                    f"Scott(h={res['h_scott']:.3f}) cov={lsc['coverage']:.3f} wgc={lsc['worst_bin_cov']:.3f} w={lsc['avg_width']:.3f} | "
+                    f"ISJ(h={res['h_isj']:.3f}) cov={li['coverage']:.3f} wgc={li['worst_bin_cov']:.3f} w={li['avg_width']:.3f}"
                 )
         except Exception as e:
             print(f"  Run {attempt+1}/{n_attempts}: FAILED — {e}")
