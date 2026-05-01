@@ -505,6 +505,9 @@ def aggregate_results(
         best_bins = [r[method_key]["best_bin_cov"] for r in runs]
         ranges = [r[method_key]["coverage_range"] for r in runs]
         avg_widths_orig = [r[method_key]["avg_width_orig"] for r in runs]
+        winkler_scores = [r[method_key]["winkler_score"] for r in runs]
+        width_error_corrs = [r[method_key]["width_error_corr"] for r in runs]
+        ccvs = [r[method_key]["ccv"] for r in runs]
 
         # Overall summary row
         rows.append({
@@ -529,6 +532,12 @@ def aggregate_results(
             "Best-Bin Cov": np.mean(best_bins),
             "Cov Range": np.mean(ranges),
             "Bin Count (mean)": "",
+            "Winkler Score (mean)": np.mean(winkler_scores),
+            "Winkler Score (std)": np.std(winkler_scores),
+            "Width-Error Corr (mean)": float(np.nanmean(width_error_corrs)),
+            "Width-Error Corr (std)": float(np.nanstd(width_error_corrs)),
+            "CCV (mean)": np.mean(ccvs),
+            "CCV (std)": np.std(ccvs),
         })
 
         # Per-bin detail rows
@@ -593,6 +602,9 @@ DISPLAY_COLUMNS = [
     "Avg Width (mean)", "Avg Width (std)", "Avg Width (orig)",
     "Worst-Bin Cov (mean)", "Worst-Bin Cov (std)",
     "Cov Range",
+    "Winkler Score (mean)", "Winkler Score (std)",
+    "Width-Error Corr (mean)", "Width-Error Corr (std)",
+    "CCV (mean)", "CCV (std)",
     "Bin Count (mean)",
 ]
 
@@ -607,7 +619,12 @@ def print_results_table(df: pd.DataFrame) -> None:
         "Avg Width (mean)", "Avg Width (std)", "Avg Width (orig)",
         "Worst-Bin Cov (mean)", "Worst-Bin Cov (std)",
         "Cov Range",
+        "Winkler Score (mean)", "Winkler Score (std)",
+        "Width-Error Corr (mean)", "Width-Error Corr (std)",
+        "CCV (mean)", "CCV (std)",
     ]
+    # Keep only columns that actually exist (backward compat with old CSVs)
+    display_cols = [c for c in display_cols if c in display_df.columns]
     display = display_df[display_cols].copy()
     # Format numeric columns to 3 decimal places for readability
     float_cols = [c for c in display_cols if c not in ("Dataset", "n", "d", "Method", "Activation", "Target Coverage")]

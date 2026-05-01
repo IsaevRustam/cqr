@@ -150,6 +150,9 @@ def run_one(regime: str, seed: int, cfg: Config) -> list[dict]:
                 Q_global=Q_g if tag == "Global" else np.nan,
                 Q_local_mean=float(np.mean(Q_l)) if tag == "Local" else np.nan,
                 Q_local_std=float(np.std(Q_l)) if tag == "Local" else np.nan,
+                winkler_score=m["winkler_score"],
+                width_error_corr=m["width_error_corr"],
+                ccv=m["ccv"],
             )
         )
     return rows
@@ -197,6 +200,12 @@ def aggregate(df: pd.DataFrame, alpha: float) -> pd.DataFrame:
             worst_cov_std=("worst_bin_cov", "std"),
             cov_gap_mean=("coverage_gap_mean", "mean"),
             cov_gap_std=("coverage_gap_mean", "std"),
+            winkler_mean=("winkler_score", "mean"),
+            winkler_std=("winkler_score", "std"),
+            width_error_corr_mean=("width_error_corr", "mean"),
+            width_error_corr_std=("width_error_corr", "std"),
+            ccv_mean=("ccv", "mean"),
+            ccv_std=("ccv", "std"),
         )
         .reset_index()
     )
@@ -217,6 +226,12 @@ def write_summary_table(agg: pd.DataFrame, alpha: float, out_dir: str) -> None:
     pivot_wr_std = agg.pivot(index="regime", columns="method", values="width_ratio_std")
     pivot_cr = agg.pivot(index="regime", columns="method", values="cov_range_mean")
     pivot_cr_std = agg.pivot(index="regime", columns="method", values="cov_range_std")
+    pivot_wk = agg.pivot(index="regime", columns="method", values="winkler_mean")
+    pivot_wk_std = agg.pivot(index="regime", columns="method", values="winkler_std")
+    pivot_wec = agg.pivot(index="regime", columns="method", values="width_error_corr_mean")
+    pivot_wec_std = agg.pivot(index="regime", columns="method", values="width_error_corr_std")
+    pivot_ccv = agg.pivot(index="regime", columns="method", values="ccv_mean")
+    pivot_ccv_std = agg.pivot(index="regime", columns="method", values="ccv_std")
 
     regimes = sorted(pivot_cov.index, key=_regime_sort_key)
     target = 1.0 - alpha
@@ -224,16 +239,18 @@ def write_summary_table(agg: pd.DataFrame, alpha: float, out_dir: str) -> None:
     md_lines: list[str] = []
     md_lines.append(f"# Global vs Local CQR — α={alpha} (target coverage {target:.2f})\n")
     md_lines.append(
-        "| Regime | Cov_G | Cov_L | WR_G | WR_L | CovRange_G | CovRange_L |"
+        "| Regime | Cov_G | Cov_L | WR_G | WR_L | CovRange_G | CovRange_L"
+        " | Winkler_G | Winkler_L | WEC_G | WEC_L | CCV_G | CCV_L |"
     )
-    md_lines.append("|---|---|---|---|---|---|---|")
+    md_lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
     tex_lines: list[str] = []
-    tex_lines.append(r"\begin{tabular}{lcccccc}")
+    tex_lines.append(r"\begin{tabular}{lcccccccccccc}")
     tex_lines.append(r"\toprule")
     tex_lines.append(
         r"Regime & Cov$_G$ & Cov$_L$ & WR$_G$ & WR$_L$ & "
-        r"CovRange$_G$ & CovRange$_L$ \\"
+        r"CovRange$_G$ & CovRange$_L$ & "
+        r"Winkler$_G$ & Winkler$_L$ & WEC$_G$ & WEC$_L$ & CCV$_G$ & CCV$_L$ \\"
     )
     tex_lines.append(r"\midrule")
 
@@ -245,11 +262,21 @@ def write_summary_table(agg: pd.DataFrame, alpha: float, out_dir: str) -> None:
         cr_g_std, cr_l_std = pivot_cr_std.loc[r, "Global"], pivot_cr_std.loc[r, "Local"]
         c_g, c_l = pivot_cov.loc[r, "Global"], pivot_cov.loc[r, "Local"]
         c_g_std, c_l_std = pivot_cov_std.loc[r, "Global"], pivot_cov_std.loc[r, "Local"]
+        wk_g, wk_l = pivot_wk.loc[r, "Global"], pivot_wk.loc[r, "Local"]
+        wk_g_std, wk_l_std = pivot_wk_std.loc[r, "Global"], pivot_wk_std.loc[r, "Local"]
+        wec_g, wec_l = pivot_wec.loc[r, "Global"], pivot_wec.loc[r, "Local"]
+        wec_g_std, wec_l_std = pivot_wec_std.loc[r, "Global"], pivot_wec_std.loc[r, "Local"]
+        ccv_g, ccv_l = pivot_ccv.loc[r, "Global"], pivot_ccv.loc[r, "Local"]
+        ccv_g_std, ccv_l_std = pivot_ccv_std.loc[r, "Global"], pivot_ccv_std.loc[r, "Local"]
 
         # Local "wins" on width if its ratio is closer to 1 (smaller in absolute deviation).
-        # For width-ratio we prefer values closer to 1; for coverage-range smaller is better.
+        # For width-ratio we prefer values closer to 1; for coverage-range / Winkler / CCV
+        # smaller is better; for Width-Error Correlation higher is better.
         local_wr_better = abs(wr_l - 1.0) < abs(wr_g - 1.0)
         local_cr_better = cr_l < cr_g
+        local_wk_better = wk_l < wk_g
+        local_wec_better = wec_l > wec_g
+        local_ccv_better = ccv_l < ccv_g
 
         def _fmt(v, s, bold_md, bold_tex):
             md = f"{v:.3f}±{s:.3f}"
@@ -264,14 +291,24 @@ def write_summary_table(agg: pd.DataFrame, alpha: float, out_dir: str) -> None:
         wr_l_md, wr_l_tex = _fmt(wr_l, wr_l_std, local_wr_better, local_wr_better)
         cr_g_md, cr_g_tex = _fmt(cr_g, cr_g_std, not local_cr_better, not local_cr_better)
         cr_l_md, cr_l_tex = _fmt(cr_l, cr_l_std, local_cr_better, local_cr_better)
+        wk_g_md, wk_g_tex = _fmt(wk_g, wk_g_std, not local_wk_better, not local_wk_better)
+        wk_l_md, wk_l_tex = _fmt(wk_l, wk_l_std, local_wk_better, local_wk_better)
+        wec_g_md, wec_g_tex = _fmt(wec_g, wec_g_std, not local_wec_better, not local_wec_better)
+        wec_l_md, wec_l_tex = _fmt(wec_l, wec_l_std, local_wec_better, local_wec_better)
+        ccv_g_md, ccv_g_tex = _fmt(ccv_g, ccv_g_std, not local_ccv_better, not local_ccv_better)
+        ccv_l_md, ccv_l_tex = _fmt(ccv_l, ccv_l_std, local_ccv_better, local_ccv_better)
 
         md_lines.append(
             f"| {r} | {c_g:.3f}±{c_g_std:.3f} | {c_l:.3f}±{c_l_std:.3f} "
-            f"| {wr_g_md} | {wr_l_md} | {cr_g_md} | {cr_l_md} |"
+            f"| {wr_g_md} | {wr_l_md} | {cr_g_md} | {cr_l_md} "
+            f"| {wk_g_md} | {wk_l_md} | {wec_g_md} | {wec_l_md} "
+            f"| {ccv_g_md} | {ccv_l_md} |"
         )
         tex_lines.append(
             f"{r} & ${c_g:.3f}\\pm{c_g_std:.3f}$ & ${c_l:.3f}\\pm{c_l_std:.3f}$ "
-            f"& {wr_g_tex} & {wr_l_tex} & {cr_g_tex} & {cr_l_tex} \\\\"
+            f"& {wr_g_tex} & {wr_l_tex} & {cr_g_tex} & {cr_l_tex} "
+            f"& {wk_g_tex} & {wk_l_tex} & {wec_g_tex} & {wec_l_tex} "
+            f"& {ccv_g_tex} & {ccv_l_tex} \\\\"
         )
 
     tex_lines.append(r"\bottomrule")
@@ -284,9 +321,12 @@ def write_summary_table(agg: pd.DataFrame, alpha: float, out_dir: str) -> None:
         f.write(
             "\n\nLegend: Cov = marginal coverage, WR = width ratio (mean of "
             "interval / oracle widths, target = 1.0), CovRange = max−min coverage "
-            "across 5 PCA bins. Subscript G = Global CQR, L = Local CQR. Bold "
-            "marks the method with width-ratio closer to 1 (resp. smaller "
-            "coverage range).\n"
+            "across 5 PCA bins, Winkler = mean Winkler/interval score (lower is better), "
+            "WEC = width–error Pearson correlation (higher is better), "
+            "CCV = conditional coverage violation / mean absolute bin-coverage deviation "
+            "from nominal (lower is better). "
+            "Subscript G = Global CQR, L = Local CQR. Bold marks the better method "
+            "per metric.\n"
         )
     with open(tex_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex_lines))
