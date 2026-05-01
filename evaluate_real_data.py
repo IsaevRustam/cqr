@@ -532,12 +532,12 @@ def aggregate_results(
             "Best-Bin Cov": np.mean(best_bins),
             "Cov Range": np.mean(ranges),
             "Bin Count (mean)": "",
-            "Winkler Score (mean)": np.mean(winkler_scores),
-            "Winkler Score (std)": np.std(winkler_scores),
+            "Winkler Score (mean)": float(np.nanmean(winkler_scores)),
+            "Winkler Score (std)": float(np.nanstd(winkler_scores)),
             "Width-Error Corr (mean)": float(np.nanmean(width_error_corrs)),
             "Width-Error Corr (std)": float(np.nanstd(width_error_corrs)),
-            "CCV (mean)": np.mean(ccvs),
-            "CCV (std)": np.std(ccvs),
+            "CCV (mean)": float(np.nanmean(ccvs)),
+            "CCV (std)": float(np.nanstd(ccvs)),
         })
 
         # Per-bin detail rows

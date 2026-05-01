@@ -250,7 +250,9 @@ def width_error_correlation(
     """
     Pearson correlation between interval width and absolute prediction error.
 
-    Proves intervals expand where the model makes larger errors.
+    Measures whether intervals expand where the model makes larger errors.
+    The prediction error is computed relative to the interval midpoint
+    (lo + hi) / 2, which serves as an implicit point forecast.
 
     Args:
         y_test: True labels, shape (n,)
@@ -258,7 +260,7 @@ def width_error_correlation(
         pred_hi: Upper interval bounds, shape (n,)
 
     Returns:
-        Pearson r in [-1, 1], or np.nan if width is constant.
+        Pearson r in [-1, 1], or np.nan if width or error is constant.
     """
     y = np.asarray(y_test).flatten()
     lo = np.asarray(pred_lo).flatten()
@@ -306,10 +308,14 @@ def evaluate_intervals(
     # Width-Error Correlation
     w_err_corr = width_error_correlation(y_test, pred_lo, pred_hi)
 
-    # CCV: mean absolute deviation of bin coverages from nominal, using all
-    # non-NaN bins (nanmean handles empty bins gracefully).
-    bin_cov_arr = np.array(cond["bin_coverages"], dtype=float)
-    ccv = float(np.nanmean(np.abs(bin_cov_arr - (1.0 - alpha))))
+    # CCV: mean absolute deviation of bin coverages from nominal.
+    # Uses ranked_bins (filtered by min_bin_size) for consistency with
+    # coverage_gap_mean — avoids noisy estimates from near-empty bins.
+    ranked_covs = np.array([b["coverage"] for b in cond["ranked_bins"]], dtype=float)
+    if len(ranked_covs) > 0:
+        ccv = float(np.mean(np.abs(ranked_covs - (1.0 - alpha))))
+    else:
+        ccv = np.nan
 
     return {
         "coverage": cov,
