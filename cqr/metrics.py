@@ -308,12 +308,13 @@ def evaluate_intervals(
     # Width-Error Correlation
     w_err_corr = width_error_correlation(y_test, pred_lo, pred_hi)
 
-    # CCV: mean absolute deviation of bin coverages from nominal.
-    # Uses ranked_bins (filtered by min_bin_size) for consistency with
-    # coverage_gap_mean — avoids noisy estimates from near-empty bins.
+    # CCV (Conditional Coverage Variance): mean squared deviation of bin
+    # coverages from nominal. Squared form penalizes large per-bin deviations
+    # more than the L1 coverage_gap_mean — the two are otherwise redundant.
+    # Uses ranked_bins (filtered by min_bin_size) to avoid noisy estimates.
     ranked_covs = np.array([b["coverage"] for b in cond["ranked_bins"]], dtype=float)
     if len(ranked_covs) > 0:
-        ccv = float(np.mean(np.abs(ranked_covs - (1.0 - alpha))))
+        ccv = float(np.mean((ranked_covs - (1.0 - alpha)) ** 2))
     else:
         ccv = np.nan
 
