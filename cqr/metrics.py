@@ -5,6 +5,7 @@ Provides marginal coverage, average width, and conditional coverage analysis.
 """
 
 import numpy as np
+from scipy.stats import pearsonr
 from typing import Dict, Any, Optional
 
 
@@ -213,6 +214,65 @@ def conditional_coverage(
     }
 
 
+def winkler_score(
+    y_test: np.ndarray,
+    pred_lo: np.ndarray,
+    pred_hi: np.ndarray,
+    alpha: float = 0.1,
+) -> float:
+    """
+    Mean Winkler (interval) score.
+
+    For each point: width + (2/alpha)*(lo - y)*I(y < lo) + (2/alpha)*(y - hi)*I(y > hi)
+
+    Args:
+        y_test: True labels, shape (n,)
+        pred_lo: Lower interval bounds, shape (n,)
+        pred_hi: Upper interval bounds, shape (n,)
+        alpha: Nominal miscoverage level
+
+    Returns:
+        Mean Winkler score (lower is better)
+    """
+    y = np.asarray(y_test).flatten()
+    lo = np.asarray(pred_lo).flatten()
+    hi = np.asarray(pred_hi).flatten()
+    widths = hi - lo
+    penalty = (2.0 / alpha) * (np.maximum(lo - y, 0.0) + np.maximum(y - hi, 0.0))
+    return float(np.mean(widths + penalty))
+
+
+def width_error_correlation(
+    y_test: np.ndarray,
+    pred_lo: np.ndarray,
+    pred_hi: np.ndarray,
+) -> float:
+    """
+    Pearson correlation between interval width and absolute prediction error.
+
+    Measures whether intervals expand where the model makes larger errors.
+    The prediction error is computed relative to the interval midpoint
+    (lo + hi) / 2, which serves as an implicit point forecast.
+
+    Args:
+        y_test: True labels, shape (n,)
+        pred_lo: Lower interval bounds, shape (n,)
+        pred_hi: Upper interval bounds, shape (n,)
+
+    Returns:
+        Pearson r in [-1, 1], or np.nan if width or error is constant.
+    """
+    y = np.asarray(y_test).flatten()
+    lo = np.asarray(pred_lo).flatten()
+    hi = np.asarray(pred_hi).flatten()
+    widths = hi - lo
+    abs_error = np.abs(y - (lo + hi) / 2.0)
+    if np.std(widths) < 1e-12 or np.std(abs_error) < 1e-12:
+        return np.nan
+    r, _ = pearsonr(widths, abs_error)
+    return float(r)
+
+
 def evaluate_intervals(
     y_test: np.ndarray,
     pred_lo: np.ndarray,
@@ -233,13 +293,29 @@ def evaluate_intervals(
         Dict with all metrics:
             coverage, avg_width, median_width, width_std,
             worst_bin_cov, best_bin_cov, coverage_gap (mean),
-            coverage_gap_max, coverage_range, bin_coverages, bin_counts
+            coverage_gap_max, coverage_range, bin_coverages, bin_counts,
+            winkler_score, width_error_corr, ccv
     """
     cov = marginal_coverage(y_test, pred_lo, pred_hi)
     avg_w = average_width(pred_lo, pred_hi)
     med_w = median_width(pred_lo, pred_hi)
     w_std = width_std(pred_lo, pred_hi)
     cond = conditional_coverage(y_test, pred_lo, pred_hi, X_test, alpha=alpha, n_bins=n_bins)
+
+    # Winkler Score
+    w_score = winkler_score(y_test, pred_lo, pred_hi, alpha=alpha)
+
+    # Width-Error Correlation
+    w_err_corr = width_error_correlation(y_test, pred_lo, pred_hi)
+
+    # CCV: mean absolute deviation of bin coverages from nominal.
+    # Uses ranked_bins (filtered by min_bin_size) for consistency with
+    # coverage_gap_mean — avoids noisy estimates from near-empty bins.
+    ranked_covs = np.array([b["coverage"] for b in cond["ranked_bins"]], dtype=float)
+    if len(ranked_covs) > 0:
+        ccv = float(np.mean(np.abs(ranked_covs - (1.0 - alpha))))
+    else:
+        ccv = np.nan
 
     return {
         "coverage": cov,
@@ -254,4 +330,7 @@ def evaluate_intervals(
         "bin_coverages": cond["bin_coverages"],
         "bin_counts": cond["bin_counts"],
         "ranked_bins": cond["ranked_bins"],
+        "winkler_score": w_score,
+        "width_error_corr": w_err_corr,
+        "ccv": ccv,
     }

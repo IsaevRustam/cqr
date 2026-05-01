@@ -77,6 +77,27 @@ METRICS_CONFIG = {
         "target_line": 0.9,
         "baseline": "auto",
     },
+    "Winkler Score": {
+        "mean_col": "Winkler Score (mean)",
+        "std_col": "Winkler Score (std)",
+        "display": "Winkler Score (lower is better)",
+        "target_line": None,
+        "baseline": "auto",
+    },
+    "Width-Error Correlation": {
+        "mean_col": "Width-Error Corr (mean)",
+        "std_col": "Width-Error Corr (std)",
+        "display": "Width–Error Correlation (higher is better)",
+        "target_line": None,
+        "baseline": "auto",
+    },
+    "CCV": {
+        "mean_col": "CCV (mean)",
+        "std_col": "CCV (std)",
+        "display": "Conditional Coverage Violation (lower is better)",
+        "target_line": 0.0,
+        "baseline": "auto",
+    },
 }
 
 
@@ -93,6 +114,14 @@ def load_results(csv_path: str = "results_real_data.csv") -> pd.DataFrame:
     # Ensure Activation column exists (backward compat)
     if "Activation" not in df.columns:
         df["Activation"] = "REQU"  # legacy default
+    # Ensure new metric columns exist so old CSVs plot gracefully (all NaN)
+    for col in [
+        "Winkler Score (mean)", "Winkler Score (std)",
+        "Width-Error Corr (mean)", "Width-Error Corr (std)",
+        "CCV (mean)", "CCV (std)",
+    ]:
+        if col not in df.columns:
+            df[col] = np.nan
     print(f"Loaded {csv_path}: {len(df)} rows")
     print(f"  Datasets:    {df['Dataset'].unique().tolist()}")
     print(f"  Methods:     {df['Method'].unique().tolist()}")
