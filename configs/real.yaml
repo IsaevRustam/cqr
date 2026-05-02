@@ -14,12 +14,17 @@ weight_decay: 1.0e-3
 n_layers: 2
 activation: relu     # Activation function: relu or requ
 
-# Localized CQR kernel space: 'yhat' | 'pca' | 'x'
+# Localized CQR kernel space: 'yhat' | 'pca' | 'x' | 'vae'
 #   yhat : 1D midpoint of predicted interval (avoids curse of dimensionality)
 #   pca  : top-k PCA components of X (fitted on train set)
 #   x    : raw X features (use only for low-d datasets)
+#   vae  : VAE posterior-mean latents (nonlinear; fitted on train set)
 kernel_space: yhat
-pca_components: 3   # only used when kernel_space: pca
+pca_components: 3    # only used when kernel_space: pca
+vae_latent_dim: 3    # only used when kernel_space: vae
+vae_hidden_dim: 64   # encoder/decoder hidden width
+vae_epochs: 100
+vae_beta: 1.0        # KL weight (1.0 = standard VAE)
 
 # Localized CQR bandwidth — applied in the chosen kernel space.
 # Silverman rule in 1D: h ≈ scale × m^{-1/5} × σ̂

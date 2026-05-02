@@ -59,8 +59,12 @@ def load_real_config(path: Optional[str]) -> Dict[str, Any]:
         "n_cond_bins": 5,
         "activation": "requ",
         "clip_outliers_iqr": None,       # IQR factor for y-outlier removal
-        "kernel_space": "yhat",            # 'yhat' | 'pca' | 'x'
+        "kernel_space": "yhat",            # 'yhat' | 'pca' | 'x' | 'vae'
         "pca_components": 3,               # number of PCA components (used when kernel_space='pca')
+        "vae_latent_dim": 3,               # latent dim when kernel_space='vae'
+        "vae_hidden_dim": 64,              # encoder/decoder hidden width
+        "vae_epochs": 100,
+        "vae_beta": 1.0,                   # KL weight (1.0 = standard VAE)
         # Per-dataset overrides: key = dataset name, value = dict of overrides
         "dataset_overrides": {
             # rf1: 64 features, ~8757 samples → 128-unit NN overfits badly
@@ -132,6 +136,8 @@ def _build_kernel_features(
     pred_test_hi: np.ndarray,
     kernel_space: str,
     pca_components: int,
+    vae_kwargs: Optional[Dict[str, Any]] = None,
+    seed: int = 0,
 ):
     """
     Build 1D or low-d kernel features for LocalConformalOptimizer.
@@ -140,6 +146,8 @@ def _build_kernel_features(
       'yhat' : 1D midpoint of predicted interval (q̂_lo + q̂_hi) / 2
       'pca'  : top-k PCA components of X, fitted on X_train
       'x'    : raw X (no dimensionality reduction)
+      'vae'  : posterior-mean latents from a VAE fitted on X_train.
+               vae_kwargs supplies: latent_dim, hidden_dim, epochs, beta.
 
     Returns (feat_train, feat_cal, feat_test, kernel_d).
     """
@@ -155,6 +163,23 @@ def _build_kernel_features(
         feat_train = pca.transform(X_train)
         feat_cal   = pca.transform(X_cal)
         feat_test  = pca.transform(X_test)
+        kernel_d   = k
+    elif kernel_space == "vae":
+        from cqr.vae import train_vae_encoder, encode_mean
+        kw = vae_kwargs or {}
+        k = min(int(kw.get("latent_dim", 3)), X_train.shape[1])
+        model = train_vae_encoder(
+            X_train,
+            latent_dim=k,
+            hidden_dim=int(kw.get("hidden_dim", 64)),
+            epochs=int(kw.get("epochs", 100)),
+            beta=float(kw.get("beta", 1.0)),
+            seed=int(seed),
+            verbose=bool(kw.get("verbose", False)),
+        )
+        feat_train = encode_mean(model, X_train)
+        feat_cal   = encode_mean(model, X_cal)
+        feat_test  = encode_mean(model, X_test)
         kernel_d   = k
     else:  # 'x'
         feat_train = X_train
@@ -264,6 +289,14 @@ def evaluate_single_run(
         pred_train_lo = model_lo(X_train_t).numpy().flatten()
         pred_train_hi = model_hi(X_train_t).numpy().flatten()
 
+    vae_kwargs = {
+        "latent_dim": int(cfg.get("vae_latent_dim", 3)),
+        "hidden_dim": int(cfg.get("vae_hidden_dim", 64)),
+        "epochs":     int(cfg.get("vae_epochs", 100)),
+        "beta":       float(cfg.get("vae_beta", 1.0)),
+        "verbose":    bool(cfg.get("verbose", False)),
+    }
+
     feat_train, feat_cal, feat_test, kernel_d = _build_kernel_features(
         data["X_train"], data["X_cal"], data["X_test"],
         pred_train_lo, pred_train_hi,
@@ -271,6 +304,8 @@ def evaluate_single_run(
         pred_test_lo, pred_test_hi,
         kernel_space=kernel_space,
         pca_components=pca_components,
+        vae_kwargs=vae_kwargs,
+        seed=seed,
     )
 
     bandwidths = _compute_bandwidths(feat_train, d=int(kernel_d), bandwidth_scale=float(cfg["bandwidth_scale"]))
@@ -686,10 +721,16 @@ def main():
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--bandwidth_scale", type=float, default=None)
     parser.add_argument("--kernel_space", type=str, default=None,
-                        choices=["yhat", "pca", "x"],
-                        help="Kernel feature space: yhat (1D predicted midpoint), pca (top-k PCA of X), x (raw X)")
+                        choices=["yhat", "pca", "x", "vae"],
+                        help="Kernel feature space: yhat (1D predicted midpoint), pca (top-k PCA of X), x (raw X), vae (VAE latents)")
     parser.add_argument("--pca_components", type=int, default=None,
                         help="Number of PCA components when --kernel_space pca (default: from config)")
+    parser.add_argument("--latent_dim", type=int, default=None,
+                        help="VAE latent dimension when --kernel_space vae (default: from config)")
+    parser.add_argument("--vae_epochs", type=int, default=None,
+                        help="VAE training epochs when --kernel_space vae (default: from config)")
+    parser.add_argument("--vae_beta", type=float, default=None,
+                        help="VAE KL weight (beta-VAE) when --kernel_space vae (default: from config)")
     parser.add_argument("--activation", type=str, default=None,
                         choices=["relu", "requ"],
                         help="Activation function (default: from config, fallback requ)")
@@ -702,10 +743,13 @@ def main():
     cfg = load_real_config(config_path)
 
     # Apply CLI overrides
-    for key in ["alpha", "n_attempts", "hidden_dim", "train_epochs", "batch_size", "bandwidth_scale", "activation", "kernel_space", "pca_components"]:
+    for key in ["alpha", "n_attempts", "hidden_dim", "train_epochs", "batch_size", "bandwidth_scale", "activation", "kernel_space", "pca_components", "vae_epochs", "vae_beta"]:
         val = getattr(args, key, None)
         if val is not None:
             cfg[key] = val
+    # CLI --latent_dim → config key vae_latent_dim
+    if getattr(args, "latent_dim", None) is not None:
+        cfg["vae_latent_dim"] = args.latent_dim
 
     activation = cfg.get("activation", "requ")
     if args.output:
@@ -716,6 +760,8 @@ def main():
             _kernel_suffix = f"PCA{int(cfg.get('pca_components', 3))}"
         elif _ks == "yhat":
             _kernel_suffix = "qdiff"
+        elif _ks == "vae":
+            _kernel_suffix = f"VAE{int(cfg.get('vae_latent_dim', 3))}"
         else:
             _kernel_suffix = "whole"
         output_path = f"results_real_data_{activation}_{_kernel_suffix}.csv"
@@ -731,9 +777,16 @@ def main():
     print(f"Repetitions: {cfg['n_attempts']}")
     print(f"Datasets: {', '.join(datasets)}")
     print(f"Bandwidth scale: {cfg['bandwidth_scale']}")
-    print(f"Kernel space: {cfg.get('kernel_space', 'yhat')}" +
-          (f" (k={cfg.get('pca_components', 3)})"
-           if cfg.get('kernel_space') == 'pca' else ""))
+    _ks_print = cfg.get('kernel_space', 'yhat')
+    if _ks_print == 'pca':
+        _ks_extra = f" (k={cfg.get('pca_components', 3)})"
+    elif _ks_print == 'vae':
+        _ks_extra = (f" (latent={cfg.get('vae_latent_dim', 3)}, "
+                     f"epochs={cfg.get('vae_epochs', 100)}, "
+                     f"beta={cfg.get('vae_beta', 1.0)})")
+    else:
+        _ks_extra = ""
+    print(f"Kernel space: {_ks_print}{_ks_extra}")
     print("-" * 70)
 
     all_rows = []

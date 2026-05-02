@@ -209,7 +209,7 @@ def _plot_one_setting(fig, outer_gs_cell, res: dict, show_xlabel: bool, show_leg
     rng_plot = np.random.default_rng(7)
     idx = rng_plot.choice(len(X_s), size=min(5000, len(X_s)), replace=False)
     ax_main.scatter(X_s[idx], Y_s[idx], s=8, alpha=0.25, c="gray",
-                    edgecolors="none", zorder=1, label="Test data")
+                    edgecolors="none", zorder=1)
 
     # --- Local CQR ---
     ax_main.fill_between(x, res["local_lo"], res["local_hi"],
@@ -231,7 +231,8 @@ def _plot_one_setting(fig, outer_gs_cell, res: dict, show_xlabel: bool, show_leg
                  ls=":", zorder=5)
 
     setting = res["setting"].upper()
-    ax_main.set_title(f"Setting {setting}: {SETTING_LABELS[setting]}", fontsize=12)
+    panel_letter = chr(ord('a') + res.get("panel_idx", ord(setting) - ord('A')))
+    ax_main.set_title(f"({panel_letter})\u2002{SETTING_LABELS[setting]}", fontsize=12)
     ax_main.set_ylabel(r"$Y$", fontsize=11)
     ax_main.set_xlim(-3.6, 3.6)
     ax_main.tick_params(labelbottom=False)
@@ -246,7 +247,7 @@ def _plot_one_setting(fig, outer_gs_cell, res: dict, show_xlabel: bool, show_leg
     xp = np.linspace(-3.6, 3.6, 400)
     ax_hist.plot(xp, norm.pdf(xp), color="#333333", lw=1.5,
                  label=r"$\mathcal{N}(0,1)$", zorder=2)
-    ax_hist.set_ylabel("Density", fontsize=9)
+    ax_hist.set_ylabel("", fontsize=9)
     ax_hist.legend(loc="upper right", fontsize=8)
     ax_hist.grid(True, alpha=0.3)
 
@@ -268,17 +269,12 @@ def make_figure(all_results: list, output_path: str, show: bool = True):
     outer = GridSpec(nrows, ncols, figure=fig, hspace=0.35, wspace=0.28)
 
     for idx, res in enumerate(all_results):
+        res["panel_idx"] = idx
         row, col = divmod(idx, ncols)
         show_xlabel = (row == nrows - 1)
         show_legend = (idx == 0)
         _plot_one_setting(fig, outer[row, col], res,
                           show_xlabel=show_xlabel, show_legend=show_legend)
-
-    fig.suptitle(
-        "Local vs Global CQR \u2014 Guan (2021), Example 4.1 + Extended Settings\n"
-        r"$X \sim \mathcal{N}(0,1),\quad Y = \mu(X) + \rho(X)\,\varepsilon$",
-        fontsize=13, y=1.01,
-    )
 
     plt.savefig(output_path, bbox_inches="tight", dpi=150)
     print(f"Figure saved: {output_path}")
@@ -320,7 +316,11 @@ def main():
                         help="Do not open the figure interactively")
     args = parser.parse_args()
 
-    output = args.output or os.path.join("figures_cqr", "guan2021_fig2.pdf")
+    if args.output:
+        output = args.output
+    else:
+        h_str = f"{args.bandwidth_scale:.2f}".replace(".", "p")
+        output = os.path.join("figures_cqr", f"guan2021_fig2_h{h_str}.pdf")
     os.makedirs(os.path.dirname(output), exist_ok=True)
 
     all_results = []
