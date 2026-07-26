@@ -36,7 +36,7 @@ PAPER_DATASETS = [
     "community", "blog_data", "rf1", "scm1d", "scm20d", "kin8nm",
 ]
 
-SEEDS = list(range(42, 62))          # 42..61; 42..46 are the published runs
+SEEDS = list(range(42, 142))         # full plan 42..141; 42..46 are the published runs
 KNN_K = 50                           # neighbors for the residual-scale estimate
 
 RAW_DIR = REPO_ROOT / "results" / "rebuttal" / "raw"

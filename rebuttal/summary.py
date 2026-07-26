@@ -50,7 +50,7 @@ def main():
     per_ds = {}
     for ds in PAPER_DATASETS:
         metas = load_seed_metrics(ds)
-        seeds = [s for s in SEEDS if s in metas]
+        seeds = sorted(metas)
         if len(seeds) < 2:
             continue
         per_ds[ds] = (metas, seeds)
@@ -60,7 +60,8 @@ def main():
     lines.append("# Rebuttal summary — Global vs Localized CQR, 20-seed extension\n")
     lines.append(
         f"Datasets with results: {n_ds}/11 "
-        f"({', '.join(per_ds)}). Seeds 42-61 (42-46 identical to the published "
+        f"({', '.join(per_ds)}). Planned seeds 42-141, per-dataset counts vary "
+        "until the sweep completes (42-46 identical to the published "
         "5-seed runs; verified against results_real_data_relu_VAEauto_hgrid.csv, "
         "max |delta| ~1e-7 from BLAS thread count only). Paired comparison: "
         "d_s = metric(Local, s) - metric(Global, s), same seed-controlled split "

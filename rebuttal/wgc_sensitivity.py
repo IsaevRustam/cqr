@@ -111,8 +111,9 @@ def _mean_ci(vals: np.ndarray):
 def main():
     lines: List[str] = []
     lines.append(
-        "WGC bin-sensitivity over 20 seeds (42-61; 42-46 identical to the "
-        "published runs). WGC = worst per-bin coverage; bins with < 20 test "
+        "WGC bin-sensitivity over all completed seeds (planned range 42-141; "
+        "42-46 identical to the published runs; per-dataset n in headers). "
+        "WGC = worst per-bin coverage; bins with < 20 test "
         "points are excluded (paper's min_bin_size), '-' = no bin qualifies. "
         "Grouping rules: pc1_K = equal-frequency bins of the first principal "
         "component of X_test (the paper's implemented rule; pc1_K5 = published "
@@ -128,7 +129,7 @@ def main():
 
     for ds in PAPER_DATASETS:
         metas = load_seed_metrics(ds)
-        seeds = [s for s in SEEDS if s in metas]
+        seeds = sorted(metas)
         if not seeds:
             continue
         n = len(seeds)
@@ -138,9 +139,9 @@ def main():
                 zs[s] = {k: f[k] for k in f.files}
 
         m0 = metas[seeds[0]]
-        note = "" if n == len(SEEDS) else f"  (INCOMPLETE: {n}/{len(SEEDS)} seeds)"
+        note = "" if n >= len(SEEDS) else f"  (PARTIAL: {n}/{len(SEEDS)} planned seeds)"
         lines.append(f"# {ds} (n={m0['n_samples']}, d={m0['n_features']}, "
-                     f"n_seeds={n}){note}\n")
+                     f"n_seeds={n}, seeds {seeds[0]}-{seeds[-1]}){note}\n")
 
         # WGC per (method, rule): array over seeds
         W = {m: {r: np.array([wgc(zs[s], m, r) for s in seeds])

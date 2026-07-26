@@ -142,15 +142,17 @@ def write_tables(out_dir: Path = OUT_DIR):
     pd_lines: List[str] = []
 
     t1_lines.append(
-        "Per-method results over 20 seeds (seeds 42-61; seeds 42-46 are identical to "
-        "the published 5-seed runs). Cells are mean +/- 95% t-CI half-width "
-        "(t_{0.975,n-1} * sd/sqrt(n), sd with ddof=1; n=20 unless flagged). "
+        "Per-method results over all completed seeds (planned range 42-141; seeds "
+        "42-46 are identical to the published 5-seed runs; per-dataset seed count "
+        "n is stated in each header). Cells are mean +/- 95% t-CI half-width "
+        "(t_{0.975,n-1} * sd/sqrt(n), sd with ddof=1; n per dataset header). "
         "Coverage target 0.90. WGC = worst-bin coverage over 5 equal-frequency "
         "bins of the first principal component of X_test (paper definition, "
         "unchanged). Width in standardized-y units. Winkler at alpha=0.1.\n")
     pd_lines.append(
         "Paired seed-wise differences d_s = metric(Local, s) - metric(Global, s) "
-        "over 20 seeds (42-61), same split and base regressors shared per seed. "
+        "over all completed seeds (planned range 42-141; n stated per dataset), "
+        "same split and base regressors shared per seed. "
         "Cells are mean(d) +/- t_{0.975,n-1} * sd(d)/sqrt(n) (ddof=1), followed by "
         "#seeds where Local improves on Global. Improvement directions: "
         "Coverage = |cov - 0.90| smaller; WGC = higher; Avg Width = lower; "
@@ -159,14 +161,14 @@ def write_tables(out_dir: Path = OUT_DIR):
 
     for ds in PAPER_DATASETS:
         metas = load_seed_metrics(ds)
-        seeds = [s for s in SEEDS if s in metas]
+        seeds = sorted(metas)
         if not seeds:
             continue
         n = len(seeds)
-        note = "" if n == len(SEEDS) else f"  (INCOMPLETE: {n}/{len(SEEDS)} seeds)"
+        note = "" if n >= len(SEEDS) else f"  (PARTIAL: {n}/{len(SEEDS)} planned seeds)"
         m0 = metas[seeds[0]]
         hdr = (f"## {ds} (n={m0['n_samples']}, d={m0['n_features']}, "
-               f"n_seeds={n}){note}\n")
+               f"n_seeds={n}, seeds {seeds[0]}-{seeds[-1]}){note}\n")
 
         # ---- table1: per-method mean +/- CI ----
         t1_lines.append(hdr)

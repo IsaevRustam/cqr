@@ -70,11 +70,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--datasets", nargs="+", default=None)
     ap.add_argument("--seeds", type=int, nargs="+", default=None)
+    ap.add_argument("--seed-range", type=int, nargs=2, metavar=("FIRST", "LAST"),
+                    default=None, help="inclusive seed range, e.g. --seed-range 42 91")
     ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args()
 
     datasets = [d for d in DATASET_ORDER if d in (args.datasets or PAPER_DATASETS)]
-    seeds = args.seeds or SEEDS
+    if args.seed_range is not None:
+        seeds = list(range(args.seed_range[0], args.seed_range[1] + 1))
+    else:
+        seeds = args.seeds or SEEDS
 
     jobs = [(d, s) for d in datasets for s in seeds if not _done(d, s)]
     total = len(datasets) * len(seeds)
