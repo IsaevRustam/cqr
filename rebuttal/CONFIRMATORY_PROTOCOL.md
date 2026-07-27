@@ -45,6 +45,13 @@ Confirmatory runs use the split-conformal order statistic
 interpolated sample quantile. Global CQR and Local CQR fallback use the same
 implementation. Therefore both methods must be rerun on the fresh seeds.
 
+## Dataset transport
+
+`kin8nm`, `scm1d`, and `scm20d` use commit-pinned DataGit snapshots of the
+same OpenML datasets (IDs `189`, `41485`, and `41486`). Each download is
+validated against a frozen SHA-256 digest and expected shape before use. This
+avoids transient OpenML API failures without changing dataset versions.
+
 ## Commands
 
 Two-worker timing pass, one fresh seed on every dataset:
