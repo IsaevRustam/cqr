@@ -17,9 +17,12 @@ CONFIRMATORY_METHOD_KEYS = ("global", "local_fixed_1.4")
 # v1: candidates = silverman/scott/isj + the 9 fixed grid values (12-grid).
 # v2: fixed grid only — the data-driven rules were dropped after the v1 runs
 #     on six datasets showed they occasionally select degenerate small h
-#     (median ESS < 10) that loses coverage. See the amendment note in
-#     TRAIN_SELECTED_PROTOCOL.md.
-SELECTED_VERSION = "2026-07-27-v2"
+#     (median ESS < 10) that loses coverage.
+# v3: symmetrized two-fold inner validation (score each h in both directions
+#     across T-cal/T-eval and average) to de-noise selection on small
+#     datasets; inner/outer latent scales logged and kernel dims asserted
+#     equal. See the amendment notes in TRAIN_SELECTED_PROTOCOL.md.
+SELECTED_VERSION = "2026-07-27-v3"
 SELECTED_METHOD_KEYS = ("global", "local_selected")
 SELECTED_SEEDS = list(range(142, 162))
 INNER_SPLIT_FRACS = (0.70, 0.15, 0.15)

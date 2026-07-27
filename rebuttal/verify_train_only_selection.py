@@ -169,9 +169,21 @@ def runtime_check_failures() -> List[str]:
         )
     if any(not c.startswith("fixed_") for c in res["candidates"]):
         failures.append(
-            "check6: v2 protocol must have fixed-grid candidates only, got "
+            "check6: v2+ protocol must have fixed-grid candidates only, got "
             + str(sorted(res["candidates"]))
         )
+    if res.get("selection_metric") != "winkler_2fold_mean":
+        failures.append(
+            f"check6: expected symmetrized selection metric, got "
+            f"{res.get('selection_metric')!r}"
+        )
+    for cand, c in res["candidates"].items():
+        mean_w = 0.5 * (c["winkler_cal_to_eval"] + c["winkler_eval_to_cal"])
+        if abs(c["winkler"] - mean_w) > 1e-12:
+            failures.append(
+                f"check6: candidate {cand}: winkler is not the mean of both "
+                "directions"
+            )
     if not (np.isfinite(res["h_selected"]) and res["h_selected"] > 0):
         failures.append(f"check6: bad h_selected {res['h_selected']!r}")
     if res["candidate_selected"] not in res["candidates"]:

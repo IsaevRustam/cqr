@@ -273,6 +273,17 @@ def run_one(
         pca_components=int(cfg.get("pca_components", 3)),
         vae_kwargs=vae_kwargs, seed=seed,
     )
+    if selected:
+        # Transfer/determinism contract: the frozen numeric h moves from the
+        # T-fit kernel space into the retrained full-train space.  Both spaces
+        # must share the latent-dim rule and dimensionality (asserted); the
+        # latent scale may still drift, so both per-dimension spreads are
+        # logged (train-only diagnostics) to make that drift measurable.
+        assert int(h_selection_log["kernel_d"]) == int(kernel_d)
+        assert int(h_selection_log["latent_dim"]) == int(resolved_latent_dim)
+        h_selection_log["outer_feat_std"] = [
+            float(s) for s in np.std(feat_train, axis=0, ddof=1)
+        ]
     bandwidths = None
     if not (confirmatory or selected):
         bandwidths = _compute_bandwidths(

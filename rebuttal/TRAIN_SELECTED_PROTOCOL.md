@@ -1,7 +1,7 @@
 # Train-only bandwidth selection protocol (`train_selected`)
 
-Frozen on 2026-07-27 as `2026-07-27-v1`; amended the same day to
-`SELECTED_VERSION = 2026-07-27-v2` (see the amendment note below).
+Frozen on 2026-07-27 as `2026-07-27-v1`; amended the same day to v2 and then
+to `SELECTED_VERSION = 2026-07-27-v3` (see the amendment notes below).
 
 ## Motivation
 
@@ -23,11 +23,13 @@ then flows through the untouched published pipeline.
    hyperparameters and seed as the outer pipeline).
 3. For each candidate h in the fixed grid — the nine values
    `0.6, 0.8, ..., 2.2` scaled by `bandwidth_scale` (v2; see amendment) — run
-   localized conformal calibration on T-cal and score the intervals on T-eval
-   by **mean Winkler score**.
-4. **Freeze the numeric h** with the lowest T-eval Winkler score (ties break
-   toward the earliest candidate in grid order). The frozen h is a plain
-   number fixed before any calibration or test data is read.
+   localized conformal calibration and **mean Winkler** scoring in **both
+   directions** across the two held-out inner splits (calibrate on T-cal,
+   score on T-eval; then swap roles) and average the two scores (v3; both
+   directions reuse the same T-fit models — no extra QR/VAE training).
+4. **Freeze the numeric h** with the lowest averaged Winkler score (ties
+   break toward the earliest candidate in grid order). The frozen h is a
+   plain number fixed before any calibration or test data is read.
 
 ## Amendment v2 (2026-07-27): fixed grid only
 
@@ -43,10 +45,46 @@ test ESS < 10, sometimes 0), losing conditional and marginal coverage
 This amendment was made after observing v1 TEST outcomes, so it is a
 protocol revision, not a pre-registered choice: v1 and v2 results must be
 reported as such, side by side where relevant. The v1 checkpoints are
-preserved under `results/rebuttal/train_selected/raw_v1/`. Note the failure
-mode that motivated the amendment is flagged label-free by the
-pre-registered ESS diagnostic; the fixed grid itself predates all
-`train_selected` runs (it is the published exploratory grid).
+preserved under `results/rebuttal/train_selected/raw_v1/`, the v2
+checkpoints (six datasets) under `raw_v2/`. Note the failure mode that
+motivated the amendment is flagged label-free by the pre-registered ESS
+diagnostic; the fixed grid itself predates all `train_selected` runs (it is
+the published exploratory grid).
+
+## Amendment v3 (2026-07-27): symmetrized inner validation + transfer determinism
+
+**Symmetrized two-fold inner validation.** On small datasets the selector is
+noisy: for diabetes the inner sizes are ≈ 124/26/26, so nine candidate h are
+ranked on ~26 validation points. v3 scores each candidate in both directions
+— calibrate on T-cal / score on T-eval, then swap the two held-out splits —
+and averages the two Winkler scores. Both directions reuse the same T-fit
+regressors and kernel features, so no additional QR/VAE training is needed;
+the effective number of validation points doubles. Unlike v2, this amendment
+is a variance-reduction change motivated by the selector's design, not by
+test outcomes. Per-candidate scores for both directions are logged
+(`winkler_cal_to_eval`, `winkler_eval_to_cal`).
+
+**Transfer determinism.** The frozen numeric h is selected in the T-fit
+latent space and applied in the retrained full-train latent space; the
+latent scale can drift between the two, so the transfer is imperfect. This
+does not invalidate the protocol (h is still a constant frozen before any
+calibration/test data is read), but the pipeline is pinned deterministic:
+
+- same standardization everywhere (the outer scalers, fitted on full train);
+- same latent-dim rule, resolved once from (calibration-set SIZE, d) and
+  shared by the inner and outer stages — the runner asserts
+  `kernel_d(inner) == kernel_d(outer)` and equal latent dims on every job;
+- same seed and training procedure — both the quantile trainers and the VAE
+  trainer call `torch.manual_seed(seed)` internally, so the outer run is
+  bit-identical whether or not selection ran first (verified on diabetes
+  seed 42);
+- latent-scale drift is measurable: per-dimension spreads of the T-fit
+  latents (`inner_feat_std`) and the retrained full-train latents
+  (`outer_feat_std`) are logged per (dataset, seed).
+
+Caveat: bit-level determinism holds for a fixed torch thread count; the
+sweep's 1-thread workers and native-thread runs differ by chaotic mini-batch
+divergence, as already documented for the published pipeline.
 
 ## Final run (per dataset, seed)
 
@@ -83,8 +121,9 @@ pre-registered ESS diagnostic; the fixed grid itself predates all
 
 Each checkpoint JSON (`results/rebuttal/train_selected/raw/<dataset>/
 seed_<seed>.json`) records under `h_selection`: the frozen `h_selected`, the
-winning candidate name, per-candidate T-eval Winkler scores, and all inner
-split sizes next to `n_cal_real`.
+winning candidate name, per-candidate Winkler scores (averaged and per
+direction), all inner split sizes next to `n_cal_real`, and the inner/outer
+latent spreads (`inner_feat_std` / `outer_feat_std`).
 `python -m rebuttal.verify_train_only_selection --report` tabulates the
 selected h per (dataset, seed).
 

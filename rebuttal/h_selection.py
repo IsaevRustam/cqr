@@ -9,14 +9,24 @@ Procedure (h is frozen before the real calibration set or test set is read):
 2. Train the quantile regressors and the kernel-space model (VAE / PCA) on
    T-fit only.
 3. For each candidate h in the fixed grid (the nine values 0.6..2.2 scaled by
-   ``bandwidth_scale``): run localized conformal calibration on T-cal and
-   score the resulting intervals on T-eval by mean Winkler score.
-4. Freeze the numeric h with the lowest T-eval Winkler score.
+   ``bandwidth_scale``): run localized conformal calibration and Winkler
+   scoring in BOTH directions across the two held-out inner splits —
+   calibrate on T-cal / score on T-eval, then swap roles — and average the
+   two Winkler scores.  Both directions reuse the same T-fit models; no
+   extra QR/VAE training.
+4. Freeze the numeric h with the lowest averaged Winkler score.
 
-Protocol v2 amendment: the data-driven candidates (silverman / scott / isj)
-were removed from the grid — in the v1 runs they occasionally won the inner
-selection with a degenerate small h (median test ESS < 10), losing coverage.
-See TRAIN_SELECTED_PROTOCOL.md.
+Protocol amendments (see TRAIN_SELECTED_PROTOCOL.md):
+- v2: the data-driven candidates (silverman / scott / isj) were removed from
+  the grid — in the v1 runs they occasionally won the inner selection with a
+  degenerate small h (median test ESS < 10), losing coverage.
+- v3: symmetrized two-fold inner validation (above) — with small datasets a
+  single ~15% T-eval scores nine candidates on ~26 points, which is noisy;
+  averaging both directions doubles the validation points for free.  v3 also
+  logs the per-dimension spread of the T-fit kernel features
+  (``inner_feat_std``) so latent-scale drift between the selection space and
+  the retrained full-train space is measurable (the runner logs the outer
+  counterpart and asserts equal kernel dimensionality).
 
 Leak-freedom contract: this module must never read calibration or test data.
 Its only public entry point, ``select_bandwidth_on_train``, accepts the outer
@@ -180,7 +190,8 @@ def select_bandwidth_on_train(
     incal_lo, incal_hi = _predict(X_incal)
     ineval_lo, ineval_hi = _predict(X_ineval)
 
-    scores = compute_conformity_scores(incal_lo, incal_hi, y_incal)
+    scores_incal = compute_conformity_scores(incal_lo, incal_hi, y_incal)
+    scores_ineval = compute_conformity_scores(ineval_lo, ineval_hi, y_ineval)
 
     kernel_space = str(cfg.get("kernel_space", "yhat"))
     vae_kwargs = {
@@ -189,7 +200,7 @@ def select_bandwidth_on_train(
         "epochs": int(cfg.get("vae_epochs", 100)),
         "beta": float(cfg.get("vae_beta", 1.0)),
     }
-    _feat_fit, feat_incal, feat_ineval, kernel_d = _inner_kernel_features(
+    feat_fit, feat_incal, feat_ineval, kernel_d = _inner_kernel_features(
         X_fit, X_incal, X_ineval,
         mids=((fit_lo + fit_hi) / 2, (incal_lo + incal_hi) / 2,
               (ineval_lo + ineval_hi) / 2),
@@ -214,10 +225,23 @@ def select_bandwidth_on_train(
     best_w = np.inf
     for name, h_val in candidates:
         assert np.isfinite(h_val) and h_val > 0
-        lcp = LocalConformalOptimizer(feat_incal, scores, h=h_val)
-        Q = lcp.predict_corrections(feat_ineval, alpha)
-        w = float(winkler_score(y_ineval, ineval_lo - Q, ineval_hi + Q, alpha=alpha))
-        per_candidate[name] = {"h": float(h_val), "winkler": w}
+        # Direction A: calibrate on T-cal, score on T-eval.
+        Q_a = LocalConformalOptimizer(
+            feat_incal, scores_incal, h=h_val,
+        ).predict_corrections(feat_ineval, alpha)
+        w_a = float(winkler_score(
+            y_ineval, ineval_lo - Q_a, ineval_hi + Q_a, alpha=alpha))
+        # Direction B: roles swapped (same T-fit models and features).
+        Q_b = LocalConformalOptimizer(
+            feat_ineval, scores_ineval, h=h_val,
+        ).predict_corrections(feat_incal, alpha)
+        w_b = float(winkler_score(
+            y_incal, incal_lo - Q_b, incal_hi + Q_b, alpha=alpha))
+        w = 0.5 * (w_a + w_b)
+        per_candidate[name] = {
+            "h": float(h_val), "winkler": w,
+            "winkler_cal_to_eval": w_a, "winkler_eval_to_cal": w_b,
+        }
         if w < best_w:  # strict < keeps the earliest candidate on exact ties
             best_name, best_h, best_w = name, float(h_val), w
 
@@ -228,7 +252,10 @@ def select_bandwidth_on_train(
         "candidate_selected": best_name,
         "winkler_selected": best_w,
         "candidates": per_candidate,
-        "selection_metric": "winkler",
+        "selection_metric": "winkler_2fold_mean",
+        "inner_feat_std": [
+            float(s) for s in np.std(feat_fit, axis=0, ddof=1)
+        ],
         "n_train": int(n_train),
         "n_fit": int(len(X_fit)),
         "n_incal": int(n_incal),
