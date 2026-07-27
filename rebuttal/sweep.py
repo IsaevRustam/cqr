@@ -4,6 +4,7 @@ Checkpointed parallel driver for exploratory and confirmatory sweeps.
 Usage (from repo root):
     python -m rebuttal.sweep                       # exploratory, seeds 42..141
     python -m rebuttal.sweep --protocol confirmatory --workers 2
+    python -m rebuttal.sweep --protocol train_selected --workers 2
     python -m rebuttal.sweep --datasets diabetes --seeds 42 43
 
 Each job writes a checkpoint below results/rebuttal/. Completed jobs are
@@ -48,6 +49,9 @@ from rebuttal.protocol import (  # noqa: E402
     CONFIRMATORY_VERSION,
     EXPLORATORY_PROTOCOL,
     PROTOCOL_CHOICES,
+    SELECTED_PROTOCOL,
+    SELECTED_SEEDS,
+    SELECTED_VERSION,
 )
 from rebuttal.runner import (  # noqa: E402
     PAPER_DATASETS,
@@ -82,6 +86,11 @@ def _done(dataset: str, seed: int, raw_dir: Path, protocol: str) -> bool:
                 meta.get("protocol") == CONFIRMATORY_PROTOCOL
                 and meta.get("protocol_version") == CONFIRMATORY_VERSION
             )
+        if protocol == SELECTED_PROTOCOL:
+            return (
+                meta.get("protocol") == SELECTED_PROTOCOL
+                and meta.get("protocol_version") == SELECTED_VERSION
+            )
         return True
     except Exception:
         return False
@@ -107,10 +116,12 @@ def main():
     if args.seed_range is not None:
         seeds = list(range(args.seed_range[0], args.seed_range[1] + 1))
     else:
-        default_seeds = (
-            CONFIRMATORY_SEEDS
-            if args.protocol == CONFIRMATORY_PROTOCOL else SEEDS
-        )
+        if args.protocol == CONFIRMATORY_PROTOCOL:
+            default_seeds = CONFIRMATORY_SEEDS
+        elif args.protocol == SELECTED_PROTOCOL:
+            default_seeds = SELECTED_SEEDS
+        else:
+            default_seeds = SEEDS
         seeds = args.seeds or default_seeds
     if not seeds:
         ap.error("seed list must be non-empty")

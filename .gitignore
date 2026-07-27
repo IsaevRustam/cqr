@@ -210,3 +210,5 @@ marimo/_lsp/
 __marimo__/
 results/rebuttal/raw/*/*.npz
 results/rebuttal/confirmatory/raw/*/*.npz
+results/rebuttal/train_selected/raw/*/*.npz
+results/rebuttal/train_selected/raw_v1/*/*.npz 

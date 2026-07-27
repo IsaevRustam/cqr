@@ -39,6 +39,9 @@ from rebuttal.protocol import (
     PRIMARY_WGC_BINS,
     PRIMARY_WGC_GROUPING,
     PROTOCOL_CHOICES,
+    SELECTED_METHOD_KEYS,
+    SELECTED_PROTOCOL,
+    SELECTED_VERSION,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -55,6 +58,7 @@ KNN_K = 50                           # neighbors for the residual-scale estimate
 
 RAW_DIR = REPO_ROOT / "results" / "rebuttal" / "raw"
 CONFIRMATORY_RAW_DIR = REPO_ROOT / "results" / "rebuttal" / "confirmatory" / "raw"
+SELECTED_RAW_DIR = REPO_ROOT / "results" / "rebuttal" / "train_selected" / "raw"
 
 
 def raw_dir_for_protocol(protocol: str) -> Path:
@@ -62,7 +66,21 @@ def raw_dir_for_protocol(protocol: str) -> Path:
         return RAW_DIR
     if protocol == CONFIRMATORY_PROTOCOL:
         return CONFIRMATORY_RAW_DIR
+    if protocol == SELECTED_PROTOCOL:
+        return SELECTED_RAW_DIR
     raise ValueError(f"unknown protocol: {protocol}")
+
+
+def _ess_summary(ess: np.ndarray) -> Dict[str, float]:
+    return {
+        "ess_min": float(np.min(ess)),
+        "ess_q10": float(np.quantile(ess, 0.1)),
+        "ess_median": float(np.median(ess)),
+        f"ess_fraction_below_{ESS_REPORT_THRESHOLD:g}": float(
+            np.mean(ess < ESS_REPORT_THRESHOLD)
+        ),
+        "ess_zero_fraction": float(np.mean(ess == 0)),
+    }
 
 
 def paper_config() -> Dict[str, Any]:
@@ -125,6 +143,7 @@ def run_one(
     if protocol not in PROTOCOL_CHOICES:
         raise ValueError(f"protocol must be one of {PROTOCOL_CHOICES}")
     confirmatory = protocol == CONFIRMATORY_PROTOCOL
+    selected = protocol == SELECTED_PROTOCOL
     if out_dir is None:
         out_dir = raw_dir_for_protocol(protocol)
 
@@ -153,6 +172,29 @@ def run_one(
         clip_outliers_iqr=cfg.get("clip_outliers_iqr"),
         robust_scale_y=cfg.get("robust_scale_y", False),
     )
+
+    # Pure function of split SIZES (not data); same value the published
+    # pipeline computes further down.
+    resolved_latent_dim = _resolve_latent_dim(
+        cfg.get("vae_latent_dim", "auto"),
+        n_cal=int(data["n_cal"]), n_features=int(d),
+    )
+
+    # Train-only bandwidth selection: h is frozen HERE, before any model has
+    # seen the calibration or test split.  The inner trainers re-seed torch
+    # internally, so the outer pipeline below is unaffected.
+    h_selection_log = None
+    h_frozen = None
+    if selected:
+        from rebuttal.h_selection import select_bandwidth_on_train
+        h_selection_log = select_bandwidth_on_train(
+            data["X_train"], data["Y_train"], cfg=cfg, seed=seed,
+            latent_dim=resolved_latent_dim, n_cal_real=int(data["n_cal"]),
+        )
+        assert (h_selection_log["n_fit"] + h_selection_log["n_incal"]
+                + h_selection_log["n_ineval"]) == int(data["n_train"])
+        h_frozen = float(h_selection_log["h_selected"])
+        assert np.isfinite(h_frozen) and h_frozen > 0
 
     X_train_t = torch.from_numpy(data["X_train"])
     Y_train_t = torch.from_numpy(data["Y_train"])
@@ -198,7 +240,7 @@ def run_one(
         "alpha": alpha,
         "n_bins": cfg["n_cond_bins"],
     }
-    if confirmatory:
+    if confirmatory or selected:
         evaluation_kwargs.update({
             "n_bins": PRIMARY_WGC_BINS,
             "grouping_values": base_width,
@@ -216,10 +258,6 @@ def run_one(
         pred_train_lo = model_lo(X_train_t).numpy().flatten()
         pred_train_hi = model_hi(X_train_t).numpy().flatten()
 
-    resolved_latent_dim = _resolve_latent_dim(
-        cfg.get("vae_latent_dim", "auto"),
-        n_cal=int(data["n_cal"]), n_features=int(d),
-    )
     vae_kwargs = {
         "latent_dim": resolved_latent_dim,
         "hidden_dim": int(cfg.get("vae_hidden_dim", 64)),
@@ -236,7 +274,7 @@ def run_one(
         vae_kwargs=vae_kwargs, seed=seed,
     )
     bandwidths = None
-    if not confirmatory:
+    if not (confirmatory or selected):
         bandwidths = _compute_bandwidths(
             feat_train, d=int(kernel_d),
             bandwidth_scale=float(cfg["bandwidth_scale"]),
@@ -272,23 +310,22 @@ def run_one(
 
     result: Dict[str, Any] = {"global": global_metrics}
     h_used: Dict[str, float] = {}
-    if confirmatory:
-        key = CONFIRMATORY_METHOD_KEYS[1]
+    if confirmatory or selected:
+        if selected:
+            key = SELECTED_METHOD_KEYS[1]
+            h_run = h_frozen
+            method_keys = list(SELECTED_METHOD_KEYS)
+        else:
+            key = CONFIRMATORY_METHOD_KEYS[1]
+            h_run = float(CONFIRMATORY_BANDWIDTH)
+            method_keys = list(CONFIRMATORY_METHOD_KEYS)
+        # Test set is touched exactly once per method: one local run at the
+        # single frozen bandwidth (plus the h-free global comparator above).
         result[key], qhat_vectors[key], ess_vectors[key] = _run_local(
-            CONFIRMATORY_BANDWIDTH, capture_ess=True,
+            h_run, capture_ess=True,
         )
-        h_used[key] = float(CONFIRMATORY_BANDWIDTH)
-        ess = ess_vectors[key]
-        result[key].update({
-            "ess_min": float(np.min(ess)),
-            "ess_q10": float(np.quantile(ess, 0.1)),
-            "ess_median": float(np.median(ess)),
-            f"ess_fraction_below_{ESS_REPORT_THRESHOLD:g}": float(
-                np.mean(ess < ESS_REPORT_THRESHOLD)
-            ),
-            "ess_zero_fraction": float(np.mean(ess == 0)),
-        })
-        method_keys = list(CONFIRMATORY_METHOD_KEYS)
+        h_used[key] = float(h_run)
+        result[key].update(_ess_summary(ess_vectors[key]))
     else:
         for key, h in (("local_silverman", bandwidths["silverman"]),
                        ("local_scott", bandwidths["scott"]),
@@ -386,11 +423,7 @@ def run_one(
         "torch_threads": torch.get_num_threads(),
         "metrics": {k: _jsonable(result[k]) for k in method_keys},
     }
-    if confirmatory:
-        meta["protocol_version"] = CONFIRMATORY_VERSION
-        meta["confirmatory_seed_range"] = [
-            int(CONFIRMATORY_SEEDS[0]), int(CONFIRMATORY_SEEDS[-1]),
-        ]
+    if confirmatory or selected:
         meta["primary_wgc"] = {
             "grouping": PRIMARY_WGC_GROUPING,
             "binning": PRIMARY_WGC_BINNING,
@@ -399,6 +432,16 @@ def run_one(
         }
         meta["ess_report_threshold"] = ESS_REPORT_THRESHOLD
         meta["conformal_quantile"] = "ceil((m+1)(1-alpha))-th order statistic"
+    if confirmatory:
+        meta["protocol_version"] = CONFIRMATORY_VERSION
+        meta["confirmatory_seed_range"] = [
+            int(CONFIRMATORY_SEEDS[0]), int(CONFIRMATORY_SEEDS[-1]),
+        ]
+    if selected:
+        meta["protocol_version"] = SELECTED_VERSION
+        # Full selection log: frozen h, winning candidate, per-candidate
+        # T-eval Winkler scores, and inner vs real calibration sizes.
+        meta["h_selection"] = h_selection_log
     with open(json_path, "w") as f:
         json.dump(meta, f)
     return meta
