@@ -48,13 +48,18 @@ def global_calibration(scores: np.ndarray, alpha: float) -> float:
     Returns:
         Q_hat: Global calibration constant (scalar)
     """
+    scores = np.asarray(scores).flatten()
     m = len(scores)
-    beta_m = np.ceil((m + 1) * (1 - alpha)) / m
+    if m == 0:
+        raise ValueError("scores must be non-empty")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must lie in (0, 1)")
 
-    # Clip to [0, 1] in case of numerical issues
-    beta_m = min(beta_m, 1.0)
-
-    return float(np.quantile(scores, beta_m))
+    # Split conformal uses the observed k-th order statistic, not an
+    # interpolated sample quantile.  Clipping k at m is the finite-sample
+    # convention used previously when the requested level exceeds one.
+    k = min(int(np.ceil((m + 1) * (1 - alpha))), m)
+    return float(np.partition(scores, k - 1)[k - 1])
 
 
 class LocalConformalOptimizer:
@@ -84,7 +89,11 @@ class LocalConformalOptimizer:
             self.X_cal = self.X_cal.reshape(-1, 1)
 
         self.scores = np.asarray(scores).flatten()
-        self.h = h
+        if len(self.X_cal) != len(self.scores):
+            raise ValueError("X_cal and scores must have the same length")
+        self.h = float(h)
+        if not np.isfinite(self.h) or self.h <= 0:
+            raise ValueError("h must be positive and finite")
 
         # Pre-compute global quantile as fallback
         self._global_fallback = None
@@ -94,7 +103,8 @@ class LocalConformalOptimizer:
         X_test: np.ndarray,
         alpha: float,
         fallback_to_global: bool = True,
-    ) -> np.ndarray:
+        return_effective_sample_size: bool = False,
+    ):
         """
         Compute local conformity correction for each test point.
 
@@ -104,9 +114,13 @@ class LocalConformalOptimizer:
             X_test: Test features, shape (n_test, d)
             alpha: Miscoverage level
             fallback_to_global: Use global quantile when no neighbors found
+            return_effective_sample_size: Also return Kish effective sample
+                size, (sum_i w_i)^2 / sum_i w_i^2, for each test point
 
         Returns:
-            Q_hat_local: Local corrections of shape (n_test,)
+            Q_hat_local: Local corrections of shape (n_test,).  If
+                return_effective_sample_size is True, returns
+                (Q_hat_local, effective_sample_size).
         """
         X_test = np.asarray(X_test)
         if X_test.ndim == 1:
@@ -126,6 +140,15 @@ class LocalConformalOptimizer:
         no_neighbors = weights_sum.flatten() == 0
         weights_sum[no_neighbors] = 1.0  # Avoid division by zero
         weights = weights / weights_sum
+        effective_sample_size = None
+        if return_effective_sample_size:
+            weights_sq_sum = np.sum(weights**2, axis=1)
+            effective_sample_size = np.divide(
+                1.0,
+                weights_sq_sum,
+                out=np.zeros_like(weights_sq_sum),
+                where=weights_sq_sum > 0,
+            )
 
         corrections = np.zeros(len(X_test))
         # Use the same finite-sample correction as global CQR:
@@ -138,7 +161,7 @@ class LocalConformalOptimizer:
         # Global quantile as fallback (with finite-sample correction)
         if fallback_to_global:
             if self._global_fallback is None:
-                self._global_fallback = float(np.quantile(self.scores, beta_m))
+                self._global_fallback = global_calibration(self.scores, alpha)
             global_q = self._global_fallback
         else:
             global_q = np.max(self.scores)  # Conservative fallback
@@ -172,6 +195,8 @@ class LocalConformalOptimizer:
             else:
                 corrections[i] = s_sorted[-1]
 
+        if return_effective_sample_size:
+            return corrections, effective_sample_size
         return corrections
 
 

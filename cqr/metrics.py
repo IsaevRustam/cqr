@@ -84,6 +84,8 @@ def conditional_coverage(
     n_bins: int = 5,
     min_bin_size: int = 20,
     method: str = "pca",
+    grouping_values: Optional[np.ndarray] = None,
+    binning: str = "quantile",
 ) -> Dict[str, Any]:
     """
     Conditional coverage analysis: compute coverage across feature-space bins.
@@ -104,6 +106,10 @@ def conditional_coverage(
         n_bins: Number of bins for conditional coverage
         min_bin_size: Minimum number of points per bin to be considered
         method: Binning method — 'pca' (first PC) or 'first_feature'
+        grouping_values: Optional pre-specified, label-free 1D grouping
+            variable.  When given, it replaces the projection of X_test.
+        binning: 'quantile' for percentile-edge bins (paper default) or
+            'rank' for exactly equal-count bins up to rounding.
 
     Returns:
         Dict with:
@@ -121,8 +127,13 @@ def conditional_coverage(
     if X.ndim == 1:
         X = X.reshape(-1, 1)
 
-    # Project to 1D for binning
-    if method == "pca" and X.shape[1] > 1:
+    # Project to 1D for binning, unless the evaluation protocol supplies a
+    # pre-specified label-free grouping variable (e.g. base interval width).
+    if grouping_values is not None:
+        projection = np.asarray(grouping_values).flatten()
+        if len(projection) != len(y):
+            raise ValueError("grouping_values and y_test must have the same length")
+    elif method == "pca" and X.shape[1] > 1:
         try:
             from sklearn.decomposition import PCA
             pca = PCA(n_components=1)
@@ -132,10 +143,33 @@ def conditional_coverage(
     else:
         projection = X[:, 0]
 
-    # Create bins using quantiles of the projection
-    bin_edges = np.percentile(projection, np.linspace(0, 100, n_bins + 1))
-    bin_edges[0] = -np.inf
-    bin_edges[-1] = np.inf
+    if binning == "quantile":
+        bin_edges = np.percentile(projection, np.linspace(0, 100, n_bins + 1))
+        bin_edges[0] = -np.inf
+        bin_edges[-1] = np.inf
+        bin_masks = [
+            (projection >= bin_edges[b]) & (projection < bin_edges[b + 1])
+            for b in range(n_bins)
+        ]
+        bin_proj_ranges = [
+            (float(bin_edges[b]), float(bin_edges[b + 1]))
+            for b in range(n_bins)
+        ]
+    elif binning == "rank":
+        order = np.argsort(projection, kind="stable")
+        bin_masks = []
+        bin_proj_ranges = []
+        for indices in np.array_split(order, n_bins):
+            mask = np.zeros(len(projection), dtype=bool)
+            mask[indices] = True
+            bin_masks.append(mask)
+            if len(indices):
+                vals = projection[indices]
+                bin_proj_ranges.append((float(np.min(vals)), float(np.max(vals))))
+            else:
+                bin_proj_ranges.append((np.nan, np.nan))
+    else:
+        raise ValueError("binning must be 'quantile' or 'rank'")
 
     covered = (y >= lo) & (y <= hi)
     widths = hi - lo
@@ -144,13 +178,9 @@ def conditional_coverage(
     bin_coverages = []
     bin_counts = []
     bin_avg_widths = []
-    bin_proj_ranges = []
-
-    for b in range(n_bins):
-        mask = (projection >= bin_edges[b]) & (projection < bin_edges[b + 1])
+    for b, mask in enumerate(bin_masks):
         count = int(np.sum(mask))
         bin_counts.append(count)
-        bin_proj_ranges.append((float(bin_edges[b]), float(bin_edges[b + 1])))
         if count > 0:
             bin_coverages.append(float(np.mean(covered[mask])))
             bin_avg_widths.append(float(np.mean(widths[mask])))
@@ -280,6 +310,8 @@ def evaluate_intervals(
     X_test: np.ndarray,
     alpha: float = 0.1,
     n_bins: int = 5,
+    grouping_values: Optional[np.ndarray] = None,
+    binning: str = "quantile",
 ) -> Dict[str, Any]:
     """
     Compute all evaluation metrics for a set of prediction intervals.
@@ -288,6 +320,8 @@ def evaluate_intervals(
         y_test, pred_lo, pred_hi, X_test: As in other functions
         alpha: Nominal miscoverage level
         n_bins: Number of bins for conditional coverage
+        grouping_values: Optional label-free 1D grouping variable
+        binning: Conditional-coverage binning rule
 
     Returns:
         Dict with all metrics:
@@ -300,7 +334,11 @@ def evaluate_intervals(
     avg_w = average_width(pred_lo, pred_hi)
     med_w = median_width(pred_lo, pred_hi)
     w_std = width_std(pred_lo, pred_hi)
-    cond = conditional_coverage(y_test, pred_lo, pred_hi, X_test, alpha=alpha, n_bins=n_bins)
+    cond = conditional_coverage(
+        y_test, pred_lo, pred_hi, X_test,
+        alpha=alpha, n_bins=n_bins,
+        grouping_values=grouping_values, binning=binning,
+    )
 
     # Winkler Score
     w_score = winkler_score(y_test, pred_lo, pred_hi, alpha=alpha)
