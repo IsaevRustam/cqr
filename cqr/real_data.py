@@ -9,15 +9,45 @@ Supports datasets from:
 All loaders return (X: np.float32, y: np.float32, info: dict).
 """
 
+import hashlib
 import os
 import numpy as np
 import pandas as pd
-import openml
 from typing import Tuple, Dict, Any, Optional, Callable
 from pathlib import Path
 
 # Default cache directory for downloaded datasets
 _CACHE_DIR = Path(__file__).parent.parent / "datasets"
+
+
+# Read-only DataGit snapshots of the same OpenML datasets used below.  URLs are
+# pinned to repository commits; SHA-256 and shape checks prevent silent drift.
+_OPENML_DATAGIT_MIRRORS = {
+    "kin8nm": {
+        "openml_id": 189,
+        "commit": "c95204adece05e1e74df8ad20baa4bed440ced7a",
+        "sha256": "7b9bf0301ac936d88122557a151e1ba8f1ebc278fcf46d9f3c6d462debdbc8ad",
+        "n_samples": 8192,
+        "n_features": 8,
+        "n_targets": 1,
+    },
+    "scm1d": {
+        "openml_id": 41485,
+        "commit": "a2dea50ca2e4300c3c52ec96111ca266f2fc20db",
+        "sha256": "f100fd59ee83d45ef3ccf0c06eca0bd39b1a2bb711727c16c36c1971446be5f3",
+        "n_samples": 9803,
+        "n_features": 280,
+        "n_targets": 16,
+    },
+    "scm20d": {
+        "openml_id": 41486,
+        "commit": "d63efbfaaff4c0a3f560d22ab25291f1c2d0cb6f",
+        "sha256": "f8fb8bd6d47f79150d4d7dd8da85f66d51ff862f8ad1c7b26f242a8a45466967",
+        "n_samples": 8966,
+        "n_features": 61,
+        "n_targets": 16,
+    },
+}
 
 
 def _ensure_cache_dir(cache_dir: Path = _CACHE_DIR) -> Path:
@@ -36,6 +66,76 @@ def _make_info(name: str, X: np.ndarray, description: str = "") -> Dict[str, Any
         "n_features": X.shape[1],
         "description": description,
     }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_verified_openml_mirror(
+    name: str,
+    description: str,
+    target_col: int = 0,
+    cache_dir: Path = _CACHE_DIR,
+) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """Load a commit-pinned DataGit CSV mirror of an OpenML dataset."""
+    import urllib.request
+
+    spec = _OPENML_DATAGIT_MIRRORS[name]
+    if not 0 <= target_col < spec["n_targets"]:
+        raise ValueError(
+            f"target_col must be in 0..{spec['n_targets'] - 1}; got {target_col}"
+        )
+
+    mirror_dir = _ensure_cache_dir(cache_dir) / "openml_datagit"
+    mirror_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{name}_{spec['commit'][:12]}.csv"
+    path = mirror_dir / filename
+    url = (
+        f"https://gitlab.com/data/d/openml/{spec['openml_id']}/-/raw/"
+        f"{spec['commit']}/dataset/tables/data.csv"
+    )
+
+    if not path.exists():
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.part")
+        try:
+            print(f"  Downloading verified OpenML mirror for {name}...")
+            urllib.request.urlretrieve(url, temporary)
+            actual_sha256 = _sha256_file(temporary)
+            if actual_sha256 != spec["sha256"]:
+                raise ValueError(
+                    f"{name} mirror SHA-256 mismatch: expected {spec['sha256']}, "
+                    f"got {actual_sha256}"
+                )
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    actual_sha256 = _sha256_file(path)
+    if actual_sha256 != spec["sha256"]:
+        raise ValueError(
+            f"cached {name} mirror SHA-256 mismatch: expected {spec['sha256']}, "
+            f"got {actual_sha256}; remove {path} and retry"
+        )
+
+    frame = pd.read_csv(path).apply(pd.to_numeric, errors="coerce")
+    expected_shape = (
+        spec["n_samples"], spec["n_features"] + spec["n_targets"],
+    )
+    if frame.shape != expected_shape:
+        raise ValueError(
+            f"{name} mirror shape mismatch: expected {expected_shape}, got {frame.shape}"
+        )
+    values = frame.to_numpy(dtype=np.float32)
+    X = values[:, :spec["n_features"]]
+    y = values[:, spec["n_features"] + target_col]
+    if not np.isfinite(X).all() or not np.isfinite(y).all():
+        raise ValueError(f"{name} mirror contains NaN/Inf")
+    return X, y, _make_info(name, X, description)
 
 
 # =============================================================================
@@ -108,6 +208,8 @@ def _load_openml_multitarget(
     Load a multi-target regression dataset from OpenML.
     Selects one target column (default: first) for scalar CQR.
     """
+    import openml
+
     dataset = openml.datasets.get_dataset(data_id)
     data, _, _, _ = dataset.get_data(dataset_format="dataframe", target=None)
 
@@ -130,8 +232,8 @@ def _load_openml_multitarget(
 
 def load_scm20d(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """SCM20D dataset (8966 samples, 61 features, 16 targets -> 1st used)."""
-    return _load_openml_multitarget(
-        data_id=41486, name="scm20d", n_targets=16,
+    return _load_verified_openml_mirror(
+        name="scm20d",
         description="Supply chain management (20d target, 1st used)",
         target_col=kwargs.get("target_col", 0),
     )
@@ -139,8 +241,8 @@ def load_scm20d(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
 
 def load_scm1d(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """SCM1D dataset (9803 samples, 280 features, 16 targets -> 1st used)."""
-    return _load_openml_multitarget(
-        data_id=41485, name="scm1d", n_targets=16,
+    return _load_verified_openml_mirror(
+        name="scm1d",
         description="Supply chain management (1d target)",
         target_col=kwargs.get("target_col", 0),
     )
@@ -403,8 +505,8 @@ def load_kin8nm(**kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
     Kin8nm robot arm kinematics dataset (8192 samples, 8 features).
     Predicts the distance of the end-effector from a target.
     """
-    return _load_openml(
-        data_id=189, name="kin8nm",
+    return _load_verified_openml_mirror(
+        name="kin8nm",
         description="Robot arm kinematics prediction",
     )
 

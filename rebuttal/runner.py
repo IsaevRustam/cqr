@@ -1,5 +1,5 @@
 """
-Single (dataset, seed) job for the 20-seed rebuttal sweep.
+Single (dataset, seed) job for exploratory and confirmatory rebuttal sweeps.
 
 Replicates ``evaluate_single_run`` from ``evaluate_real_data.py`` step for
 step — same helper functions, same operation order, same config resolution —
@@ -16,16 +16,30 @@ Paper configuration (verified bit-exact against
     configs/real.yaml + CLI overrides
     --kernel_space vae --latent_dim auto
     --fixed_bandwidth_grid 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0 2.2
-Published seeds: 42..46 (cfg seed 42 + attempt).  Rebuttal sweep: 42..61.
+Published seeds: 42..46. Exploratory range: 42..141. Confirmatory range and
+fixed choices are defined in ``rebuttal.protocol``.
 """
 
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
-import torch
+
+from rebuttal.protocol import (
+    CONFIRMATORY_BANDWIDTH,
+    CONFIRMATORY_METHOD_KEYS,
+    CONFIRMATORY_PROTOCOL,
+    CONFIRMATORY_SEEDS,
+    CONFIRMATORY_VERSION,
+    ESS_REPORT_THRESHOLD,
+    EXPLORATORY_PROTOCOL,
+    PRIMARY_WGC_BINNING,
+    PRIMARY_WGC_BINS,
+    PRIMARY_WGC_GROUPING,
+    PROTOCOL_CHOICES,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,6 +54,15 @@ SEEDS = list(range(42, 142))         # full plan 42..141; 42..46 are the publish
 KNN_K = 50                           # neighbors for the residual-scale estimate
 
 RAW_DIR = REPO_ROOT / "results" / "rebuttal" / "raw"
+CONFIRMATORY_RAW_DIR = REPO_ROOT / "results" / "rebuttal" / "confirmatory" / "raw"
+
+
+def raw_dir_for_protocol(protocol: str) -> Path:
+    if protocol == EXPLORATORY_PROTOCOL:
+        return RAW_DIR
+    if protocol == CONFIRMATORY_PROTOCOL:
+        return CONFIRMATORY_RAW_DIR
+    raise ValueError(f"unknown protocol: {protocol}")
 
 
 def paper_config() -> Dict[str, Any]:
@@ -75,9 +98,15 @@ def _knn_residual_scale(X_cal, resid_cal, X_test, k=KNN_K):
     return scale
 
 
-def run_one(dataset: str, seed: int, out_dir: Path = RAW_DIR) -> Dict[str, Any]:
+def run_one(
+    dataset: str,
+    seed: int,
+    out_dir: Optional[Path] = None,
+    protocol: str = EXPLORATORY_PROTOCOL,
+) -> Dict[str, Any]:
     """Run one (dataset, seed) pair; save npz + json checkpoint; return metrics."""
     import sys
+    import torch
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
 
@@ -92,6 +121,12 @@ def run_one(dataset: str, seed: int, out_dir: Path = RAW_DIR) -> Dict[str, Any]:
         _build_method_specs, _compute_bandwidths, _build_kernel_features,
         _resolve_latent_dim,
     )
+
+    if protocol not in PROTOCOL_CHOICES:
+        raise ValueError(f"protocol must be one of {PROTOCOL_CHOICES}")
+    confirmatory = protocol == CONFIRMATORY_PROTOCOL
+    if out_dir is None:
+        out_dir = raw_dir_for_protocol(protocol)
 
     t0 = time.time()
     cfg = paper_config()
@@ -158,10 +193,22 @@ def run_one(dataset: str, seed: int, out_dir: Path = RAW_DIR) -> Dict[str, Any]:
         pred_test_lo[crossed], pred_test_hi[crossed] = (
             pred_test_hi[crossed].copy(), pred_test_lo[crossed].copy())
 
+    base_width = pred_test_hi - pred_test_lo
+    evaluation_kwargs = {
+        "alpha": alpha,
+        "n_bins": cfg["n_cond_bins"],
+    }
+    if confirmatory:
+        evaluation_kwargs.update({
+            "n_bins": PRIMARY_WGC_BINS,
+            "grouping_values": base_width,
+            "binning": PRIMARY_WGC_BINNING,
+        })
+
     Q_hat_global = global_calibration(scores, alpha)
     global_metrics = evaluate_intervals(
         data["Y_test"], pred_test_lo - Q_hat_global, pred_test_hi + Q_hat_global,
-        data["X_test"], alpha=alpha, n_bins=cfg["n_cond_bins"],
+        data["X_test"], **evaluation_kwargs,
     )
 
     kernel_space = str(cfg.get("kernel_space", "yhat"))
@@ -188,44 +235,76 @@ def run_one(dataset: str, seed: int, out_dir: Path = RAW_DIR) -> Dict[str, Any]:
         pca_components=int(cfg.get("pca_components", 3)),
         vae_kwargs=vae_kwargs, seed=seed,
     )
-    bandwidths = _compute_bandwidths(
-        feat_train, d=int(kernel_d),
-        bandwidth_scale=float(cfg["bandwidth_scale"]),
-        fixed_bandwidth=float(cfg.get("fixed_bandwidth", 1.5)),
-    )
+    bandwidths = None
+    if not confirmatory:
+        bandwidths = _compute_bandwidths(
+            feat_train, d=int(kernel_d),
+            bandwidth_scale=float(cfg["bandwidth_scale"]),
+            fixed_bandwidth=float(cfg.get("fixed_bandwidth", 1.5)),
+        )
 
     qhat_vectors: Dict[str, np.ndarray] = {}
+    ess_vectors: Dict[str, np.ndarray] = {}
 
-    def _run_local(h_val):
+    def _run_local(h_val, capture_ess=False):
         lcp = LocalConformalOptimizer(feat_cal, scores, h=h_val)
         parts = []
+        ess_parts = []
         for start in range(0, len(feat_test), 1000):
             end = min(start + 1000, len(feat_test))
-            parts.append(lcp.predict_corrections(feat_test[start:end], alpha))
+            predicted = lcp.predict_corrections(
+                feat_test[start:end], alpha,
+                return_effective_sample_size=capture_ess,
+            )
+            if capture_ess:
+                q_part, ess_part = predicted
+                parts.append(q_part)
+                ess_parts.append(ess_part)
+            else:
+                parts.append(predicted)
         Q_hat = np.concatenate(parts)
         m = evaluate_intervals(
             data["Y_test"], pred_test_lo - Q_hat, pred_test_hi + Q_hat,
-            data["X_test"], alpha=alpha, n_bins=cfg["n_cond_bins"],
+            data["X_test"], **evaluation_kwargs,
         )
-        return m, Q_hat
+        ESS = np.concatenate(ess_parts) if capture_ess else None
+        return m, Q_hat, ESS
 
     result: Dict[str, Any] = {"global": global_metrics}
     h_used: Dict[str, float] = {}
-    for key, h in (("local_silverman", bandwidths["silverman"]),
-                   ("local_scott", bandwidths["scott"]),
-                   ("local_isj", bandwidths["isj"])):
-        result[key], qhat_vectors[key] = _run_local(h)
-        h_used[key] = float(h)
-    bs = float(cfg["bandwidth_scale"])
-    for h in cfg["fixed_bandwidth_grid"]:
-        tag = f"{float(h):g}"
-        h_scaled = max(bs * float(h), 1e-6)
-        key = f"local_fixed_{tag}"
-        result[key], qhat_vectors[key] = _run_local(h_scaled)
-        h_used[key] = float(h_scaled)
+    if confirmatory:
+        key = CONFIRMATORY_METHOD_KEYS[1]
+        result[key], qhat_vectors[key], ess_vectors[key] = _run_local(
+            CONFIRMATORY_BANDWIDTH, capture_ess=True,
+        )
+        h_used[key] = float(CONFIRMATORY_BANDWIDTH)
+        ess = ess_vectors[key]
+        result[key].update({
+            "ess_min": float(np.min(ess)),
+            "ess_q10": float(np.quantile(ess, 0.1)),
+            "ess_median": float(np.median(ess)),
+            f"ess_fraction_below_{ESS_REPORT_THRESHOLD:g}": float(
+                np.mean(ess < ESS_REPORT_THRESHOLD)
+            ),
+            "ess_zero_fraction": float(np.mean(ess == 0)),
+        })
+        method_keys = list(CONFIRMATORY_METHOD_KEYS)
+    else:
+        for key, h in (("local_silverman", bandwidths["silverman"]),
+                       ("local_scott", bandwidths["scott"]),
+                       ("local_isj", bandwidths["isj"])):
+            result[key], qhat_vectors[key], _ = _run_local(h)
+            h_used[key] = float(h)
+        bs = float(cfg["bandwidth_scale"])
+        for h in cfg["fixed_bandwidth_grid"]:
+            tag = f"{float(h):g}"
+            h_scaled = max(bs * float(h), 1e-6)
+            key = f"local_fixed_{tag}"
+            result[key], qhat_vectors[key], _ = _run_local(h_scaled)
+            h_used[key] = float(h_scaled)
+        method_keys = [s[0] for s in _build_method_specs(cfg)]
 
     scaler_y = data["scaler_y"]
-    method_keys = [s[0] for s in _build_method_specs(cfg)]
     for mkey in method_keys:
         md = result[mkey]
         if scaler_y is not None:
@@ -266,6 +345,7 @@ def run_one(dataset: str, seed: int, out_dir: Path = RAW_DIR) -> Dict[str, Any]:
         pc1=pc1.astype(np.float64),
         knn_scale=knn_scale.astype(np.float64),
         **{f"qhat_{k}": v.astype(np.float64) for k, v in qhat_vectors.items()},
+        **{f"ess_{k}": v.astype(np.float64) for k, v in ess_vectors.items()},
     )
 
     def _jsonable(md):
@@ -284,6 +364,7 @@ def run_one(dataset: str, seed: int, out_dir: Path = RAW_DIR) -> Dict[str, Any]:
         return out
 
     meta = {
+        "protocol": protocol,
         "dataset": dataset,
         "seed": seed,
         "n_samples": int(info["n_samples"]),
@@ -305,6 +386,19 @@ def run_one(dataset: str, seed: int, out_dir: Path = RAW_DIR) -> Dict[str, Any]:
         "torch_threads": torch.get_num_threads(),
         "metrics": {k: _jsonable(result[k]) for k in method_keys},
     }
+    if confirmatory:
+        meta["protocol_version"] = CONFIRMATORY_VERSION
+        meta["confirmatory_seed_range"] = [
+            int(CONFIRMATORY_SEEDS[0]), int(CONFIRMATORY_SEEDS[-1]),
+        ]
+        meta["primary_wgc"] = {
+            "grouping": PRIMARY_WGC_GROUPING,
+            "binning": PRIMARY_WGC_BINNING,
+            "n_bins": PRIMARY_WGC_BINS,
+            "uses_test_labels": False,
+        }
+        meta["ess_report_threshold"] = ESS_REPORT_THRESHOLD
+        meta["conformal_quantile"] = "ceil((m+1)(1-alpha))-th order statistic"
     with open(json_path, "w") as f:
         json.dump(meta, f)
     return meta
